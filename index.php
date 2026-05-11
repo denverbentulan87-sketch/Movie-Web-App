@@ -8,6 +8,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id = $_SESSION['user_id'];
+$username = $_SESSION['username'];
 
 /* ADD MOVIE */
 if(isset($_POST['add_movie'])){
@@ -707,6 +708,9 @@ body::before {
         <div class="header-brand">
             <div class="brand-label">Cinema Vault</div>
             <div class="brand-title">My Watchlist</div>
+            <div class ="welcome-user">
+                Welcome back, <span style="color: var(--gold-light); font-weight: 600;"><?= htmlspecialchars($username) ?></span>!
+            </div>
         </div>
         <div class="header-actions">
             <button class="btn-primary" onclick="openModal('addModal')">

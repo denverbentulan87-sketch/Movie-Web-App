@@ -1,8 +1,4 @@
 <?php
-/**
- * register.php
- * User registration — styled to match the Cinema Vault dashboard.
- */
 
 require_once 'db.php';
 
