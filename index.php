@@ -7,7 +7,7 @@ if (!isset($_SESSION['user_id'])) {
     exit();
 }
 
-$user_id = $_SESSION['user_id'];
+$user_id  = $_SESSION['user_id'];
 $username = $_SESSION['username'];
 
 /* ADD MOVIE */
@@ -87,7 +87,6 @@ $result = $stmt->get_result();
 // STATS
 $total = $watched = $watching = $unwatched = $rating_sum = $rating_count = 0;
 $data  = [];
-$genres_all = [];
 
 while ($row = $result->fetch_assoc()) {
     $data[] = $row;
@@ -96,17 +95,16 @@ while ($row = $result->fetch_assoc()) {
     if ($row['status'] == 'watching')  $watching++;
     if ($row['status'] == 'unwatched') $unwatched++;
     if (!empty($row['rating'])) { $rating_sum += $row['rating']; $rating_count++; }
-    if (!empty($row['genre']) && !in_array($row['genre'], $genres_all)) $genres_all[] = $row['genre'];
 }
 
-$avg = $rating_count ? round($rating_sum / $rating_count, 1) : "—";
+$avg       = $rating_count ? round($rating_sum / $rating_count, 1) : "—";
 $watch_pct = $total ? round(($watched / $total) * 100) : 0;
 
 // Fetch all genres for filter dropdown (unfiltered)
 $gstmt = $conn->prepare("SELECT DISTINCT genre FROM movie_watchlist WHERE user_id=? AND genre != '' ORDER BY genre");
 $gstmt->bind_param("i", $user_id);
 $gstmt->execute();
-$gresult = $gstmt->get_result();
+$gresult    = $gstmt->get_result();
 $all_genres = [];
 while ($g = $gresult->fetch_assoc()) $all_genres[] = $g['genre'];
 ?>
@@ -346,6 +344,7 @@ body::before {
     outline: none;
     transition: border-color .2s, box-shadow .2s;
     appearance: none;
+    -webkit-appearance: none;
 }
 .toolbar input { flex: 1; min-width: 180px; }
 .toolbar select { min-width: 150px; cursor: pointer; }
@@ -367,6 +366,9 @@ body::before {
     cursor: pointer;
     transition: all .2s;
     white-space: nowrap;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
 }
 .toolbar-btn:hover, .toolbar-btn.active {
     background: var(--gold-dim);
@@ -441,17 +443,19 @@ body::before {
     overflow: hidden;
     text-overflow: ellipsis;
     margin-bottom: 6px;
+    cursor: pointer;
+    transition: color .2s;
 }
+.movie-title:hover { color: var(--gold-light); }
 
-<<<<<<< HEAD
-.btn-delete {
-    color:#ff4d4d;
-    border:1px solid rgba(255, 0, 0, 0.34);
-    padding:6px 12px;
-    border-radius:10px;
-    text-decoration:none;
-=======
-.movie-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* ── FIX 1: Restored .movie-meta and .genre-tag
+   (was broken by Git merge conflict markers) ───────── */
+.movie-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
 
 .genre-tag {
     background: var(--surface2);
@@ -462,7 +466,6 @@ body::before {
     color: var(--muted);
     font-weight: 500;
     letter-spacing: .5px;
->>>>>>> 4c47f97545920b789af964f8f26f95857a546d4a
 }
 
 .status-badge {
@@ -487,10 +490,7 @@ body::before {
     justify-content: flex-end;
 }
 
-.rating-stars {
-    display: flex;
-    gap: 2px;
-}
+.rating-stars { display: flex; gap: 2px; }
 
 .star {
     width: 10px; height: 10px;
@@ -549,18 +549,23 @@ body::before {
 .empty p { font-size: 14px; }
 
 /* ─── MODALS ───────────────────────────────────────── */
+/* FIX 2: Use display:none by default, toggled via .open class.
+   z-index raised above glow orbs (z-index:0) and app (z-index:1) */
 .modal-overlay {
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.8);
+    background: rgba(0,0,0,0.82);
     backdrop-filter: blur(8px);
-    z-index: 100;
+    -webkit-backdrop-filter: blur(8px);
+    z-index: 1000;          /* well above everything */
     justify-content: center;
     align-items: center;
     padding: 20px;
 }
-.modal-overlay.open { display: flex; }
+.modal-overlay.open {
+    display: flex;           /* flex only when open */
+}
 
 .modal {
     background: var(--surface);
@@ -572,6 +577,9 @@ body::before {
     animation: modalIn .3s cubic-bezier(.34,1.56,.64,1);
     box-shadow: 0 24px 80px rgba(0,0,0,0.8);
     position: relative;
+    /* Ensure modal itself never overflows the viewport */
+    max-height: 90vh;
+    overflow-y: auto;
 }
 
 @keyframes modalIn {
@@ -604,6 +612,7 @@ body::before {
     justify-content: center;
     font-size: 18px;
     transition: all .2s;
+    flex-shrink: 0;
 }
 .modal-close:hover { color: var(--text); background: var(--surface3); }
 
@@ -632,6 +641,7 @@ body::before {
     outline: none;
     transition: border-color .2s, box-shadow .2s;
     appearance: none;
+    -webkit-appearance: none;
 }
 .form-input:focus, .form-select:focus {
     border-color: var(--gold);
@@ -643,6 +653,7 @@ body::before {
     display: flex;
     gap: 6px;
     align-items: center;
+    flex-wrap: wrap;
 }
 .star-btn {
     background: none;
@@ -652,9 +663,9 @@ body::before {
     opacity: .3;
     transition: opacity .15s, transform .15s;
     line-height: 1;
+    color: var(--gold);
 }
 .star-btn:hover, .star-btn.on { opacity: 1; transform: scale(1.1); }
-.rating-hidden { display: none; }
 
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
@@ -674,16 +685,9 @@ body::before {
 .modal-footer .btn-cancel:hover { color: var(--text); }
 
 /* ─── CONFIRM MODAL ────────────────────────────────── */
-.confirm-icon { font-size: 40px; text-align: center; margin-bottom: 12px; }
-.confirm-text { text-align: center; color: var(--muted); font-size: 14px; margin-bottom: 4px; }
+.confirm-icon  { font-size: 40px; text-align: center; margin-bottom: 12px; }
+.confirm-text  { text-align: center; color: var(--muted); font-size: 14px; margin-bottom: 4px; }
 .confirm-title { text-align: center; font-family: 'Playfair Display', serif; font-size: 20px; margin-bottom: 8px; }
-
-/* ─── FOOTER ───────────────────────────────────────── */
-.footer {
-    margin-top: 60px;
-    display: flex;
-    justify-content: center;
-}
 
 /* ─── SCROLLBAR ────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; }
@@ -701,6 +705,7 @@ body::before {
     .stats-grid { grid-template-columns: repeat(2,1fr); }
     .toolbar { flex-direction:column; }
     .toolbar input, .toolbar select { min-width:100%; }
+    .form-row { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -717,8 +722,8 @@ body::before {
         <div class="header-brand">
             <div class="brand-label">Cinema Vault</div>
             <div class="brand-title">My Watchlist</div>
-            <div class ="welcome-user">
-                Welcome back, <span style="color: var(--gold-light); font-weight: 600;"><?= htmlspecialchars($username) ?></span>!
+            <div class="welcome-user">
+                Welcome back, <span style="color:var(--gold-light);font-weight:600;"><?= htmlspecialchars($username) ?></span>!
             </div>
         </div>
         <div class="header-actions">
@@ -813,12 +818,13 @@ body::before {
         <?php else: ?>
         <?php foreach ($data as $i => $row): ?>
         <div class="movie-card status-<?= $row['status'] ?>" style="animation-delay:<?= $i * 0.04 ?>s">
+
             <div class="movie-rank"><?= str_pad($i+1, 2, '0', STR_PAD_LEFT) ?></div>
 
             <div class="movie-info">
                 <div class="movie-title"><?= htmlspecialchars($row['movie_title']) ?></div>
                 <div class="movie-meta">
-                    <?php if($row['genre']): ?>
+                    <?php if(!empty($row['genre'])): ?>
                     <span class="genre-tag"><?= htmlspecialchars($row['genre']) ?></span>
                     <?php endif; ?>
                     <span class="status-badge <?= $row['status'] ?>"><?= ucfirst($row['status']) ?></span>
@@ -827,10 +833,12 @@ body::before {
             </div>
 
             <div class="movie-rating">
-                <?php if($row['rating']): ?>
+                <?php if(!empty($row['rating'])): ?>
                 <div class="rating-stars">
                     <?php for($s=1;$s<=5;$s++): $lit = ($s <= round($row['rating']/2)); ?>
-                    <svg class="star <?= $lit?'lit':'' ?>" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                    <svg class="star <?= $lit?'lit':'' ?>" viewBox="0 0 24 24">
+                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                    </svg>
                     <?php endfor; ?>
                 </div>
                 <span class="rating-num"><?= $row['rating'] ?></span>
@@ -843,16 +851,22 @@ body::before {
                 <button class="card-btn card-btn-edit" onclick="openEditModal(
                     <?= $row['watchlist_id'] ?>,
                     '<?= addslashes(htmlspecialchars($row['movie_title'])) ?>',
-                    '<?= addslashes(htmlspecialchars($row['genre'])) ?>',
+                    '<?= addslashes(htmlspecialchars($row['genre'] ?? '')) ?>',
                     '<?= $row['status'] ?>',
                     '<?= $row['rating'] ?>'
                 )">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                        <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                    </svg>
                     Edit
                 </button>
                 <a href="?delete_id=<?= $row['watchlist_id'] ?>" class="card-btn card-btn-del"
                    onclick="return confirm('Remove \'<?= addslashes($row['movie_title']) ?>\' from your vault?')">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"/>
+                        <path d="M19 6l-1 14H6L5 6"/>
+                    </svg>
                 </a>
             </div>
         </div>
@@ -973,7 +987,8 @@ body::before {
     <form method="POST">
         <div class="modal-footer" style="margin-top:24px;">
             <button type="button" class="btn-cancel" onclick="closeModals()">Keep Films</button>
-            <button class="btn-primary" name="delete_all" type="submit" style="background:linear-gradient(135deg,#ef4444,#b91c1c); box-shadow:0 4px 20px rgba(239,68,68,0.3);">
+            <button class="btn-primary" name="delete_all" type="submit"
+                    style="background:linear-gradient(135deg,#ef4444,#b91c1c);box-shadow:0 4px 20px rgba(239,68,68,0.3);">
                 Yes, Delete All
             </button>
         </div>
@@ -992,7 +1007,7 @@ body::before {
     <div class="confirm-text">You'll need to log back in to access your vault.</div>
     <div class="modal-footer" style="margin-top:24px;">
         <button type="button" class="btn-cancel" onclick="closeModals()">Stay</button>
-        <a href="logout.php" class="btn-primary" style="text-align:center; justify-content:center;">Logout</a>
+        <a href="logout.php" class="btn-primary" style="text-align:center;justify-content:center;">Logout</a>
     </div>
 </div>
 </div>
@@ -1008,19 +1023,25 @@ function closeModals() {
     document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('open'));
     document.body.style.overflow = '';
 }
-// close on backdrop click
+
+// Close on backdrop click
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
-    overlay.addEventListener('click', e => { if(e.target === overlay) closeModals(); });
+    overlay.addEventListener('click', e => {
+        if (e.target === overlay) closeModals();
+    });
 });
-// close on Escape
-document.addEventListener('keydown', e => { if(e.key === 'Escape') closeModals(); });
+
+// Close on Escape key
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeModals();
+});
 
 /* ── Open edit modal ───────────────────────────────── */
 function openEditModal(id, title, genre, status, rating) {
-    document.getElementById('edit_id').value    = id;
-    document.getElementById('edit_title').value = title;
-    document.getElementById('edit_genre').value = genre;
-    document.getElementById('edit_status').value= status;
+    document.getElementById('edit_id').value     = id;
+    document.getElementById('edit_title').value  = title;
+    document.getElementById('edit_genre').value  = genre;
+    document.getElementById('edit_status').value = status;
     setRating('edit', parseInt(rating) || 0);
     openModal('editModal');
 }
@@ -1037,7 +1058,7 @@ function setRating(prefix, val) {
 
 // Hover preview for star pickers
 document.querySelectorAll('.star-picker').forEach(picker => {
-    const prefix = picker.id.replace('StarPicker','').toLowerCase();
+    const prefix = picker.id.replace('StarPicker', '').toLowerCase();
     picker.querySelectorAll('.star-btn').forEach(btn => {
         btn.addEventListener('mouseenter', () => {
             const hover = parseInt(btn.dataset.val);
@@ -1046,7 +1067,7 @@ document.querySelectorAll('.star-picker').forEach(picker => {
             });
         });
         btn.addEventListener('mouseleave', () => {
-            const current = parseInt(document.getElementById(prefix+'RatingVal').value) || 0;
+            const current = parseInt(document.getElementById(prefix + 'RatingVal').value) || 0;
             picker.querySelectorAll('.star-btn').forEach(b => {
                 b.style.opacity = parseInt(b.dataset.val) <= current ? '1' : '0.3';
             });
