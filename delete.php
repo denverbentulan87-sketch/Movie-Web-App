@@ -23,6 +23,6 @@ if ($stmt->execute()) {
     header("Location: index.php");
     exit();
 } else {
-    echo "Error deleting movie.";
+    echo "Error in deleting movie.";
 }
 ?>

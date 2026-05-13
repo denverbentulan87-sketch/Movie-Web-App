@@ -443,6 +443,14 @@ body::before {
     margin-bottom: 6px;
 }
 
+<<<<<<< HEAD
+.btn-delete {
+    color:#ff4d4d;
+    border:1px solid rgba(255, 0, 0, 0.34);
+    padding:6px 12px;
+    border-radius:10px;
+    text-decoration:none;
+=======
 .movie-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 .genre-tag {
@@ -454,6 +462,7 @@ body::before {
     color: var(--muted);
     font-weight: 500;
     letter-spacing: .5px;
+>>>>>>> 4c47f97545920b789af964f8f26f95857a546d4a
 }
 
 .status-badge {
