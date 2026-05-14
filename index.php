@@ -1,7 +1,7 @@
-<?php 
+<?php
 include 'db.php';
-
 session_start();
+
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
     exit();
@@ -10,26 +10,71 @@ if (!isset($_SESSION['user_id'])) {
 $user_id  = $_SESSION['user_id'];
 $username = $_SESSION['username'];
 
-/* ADD MOVIE */
-if(isset($_POST['add_movie'])){
-    $stmt = $conn->prepare("INSERT INTO movie_watchlist (user_id,movie_title,genre,status,rating,date_added) VALUES (?,?,?,?,?,NOW())");
-    $stmt->bind_param("isssi", $user_id, $_POST['movie_title'], $_POST['genre'], $_POST['status'], $_POST['rating']);
+/* ── UPLOAD HELPER ── */
+function handleUpload($field, $old_url = '') {
+    if (!isset($_FILES[$field]) || $_FILES[$field]['error'] === UPLOAD_ERR_NO_FILE) {
+        return $old_url;
+    }
+    if ($_FILES[$field]['error'] !== UPLOAD_ERR_OK) return $old_url;
+
+    $allowed = ['image/jpeg','image/jpg','image/png','image/gif','image/webp'];
+    $mime    = mime_content_type($_FILES[$field]['tmp_name']);
+    if (!in_array($mime, $allowed)) return $old_url;
+    if ($_FILES[$field]['size'] > 5 * 1024 * 1024) return $old_url;
+
+    $upload_dir = __DIR__ . '/assets/covers/';
+    if (!is_dir($upload_dir)) mkdir($upload_dir, 0755, true);
+
+    $ext      = strtolower(pathinfo($_FILES[$field]['name'], PATHINFO_EXTENSION));
+    $filename = uniqid('cover_', true) . '.' . $ext;
+    $dest     = $upload_dir . $filename;
+
+    if (move_uploaded_file($_FILES[$field]['tmp_name'], $dest)) {
+        if ($old_url && strpos($old_url, 'assets/covers/') !== false) {
+            $old_path = __DIR__ . '/' . ltrim($old_url, '/');
+            if (file_exists($old_path)) unlink($old_path);
+        }
+        return 'assets/covers/' . $filename;
+    }
+    return $old_url;
+}
+
+/* ── ADD MOVIE ── */
+if (isset($_POST['add_movie'])) {
+    $cover_url = handleUpload('cover_file');
+    $stmt = $conn->prepare("INSERT INTO movie_watchlist (user_id,movie_title,genre,status,rating,date_added,description,cover_url) VALUES (?,?,?,?,?,NOW(),?,?)");
+    $stmt->bind_param("isssiss", $user_id, $_POST['movie_title'], $_POST['genre'], $_POST['status'], $_POST['rating'], $_POST['description'], $cover_url);
     $stmt->execute();
-    header("Location: index.php");
+    header("Location: index.php?added=1");
     exit();
 }
 
-/* EDIT MOVIE */
-if(isset($_POST['edit_movie'])){
-    $stmt = $conn->prepare("UPDATE movie_watchlist SET movie_title=?, genre=?, status=?, rating=? WHERE watchlist_id=? AND user_id=?");
-    $stmt->bind_param("sssiii", $_POST['movie_title'], $_POST['genre'], $_POST['status'], $_POST['rating'], $_POST['id'], $user_id);
+/* ── EDIT MOVIE ── */
+if (isset($_POST['edit_movie'])) {
+    $cur = $conn->prepare("SELECT cover_url FROM movie_watchlist WHERE watchlist_id=? AND user_id=?");
+    $cur->bind_param("ii", $_POST['id'], $user_id);
+    $cur->execute();
+    $cur_row   = $cur->get_result()->fetch_assoc();
+    $old_cover = $cur_row ? $cur_row['cover_url'] : '';
+    $cover_url = handleUpload('cover_file', $old_cover);
+
+    $stmt = $conn->prepare("UPDATE movie_watchlist SET movie_title=?,genre=?,status=?,rating=?,description=?,cover_url=? WHERE watchlist_id=? AND user_id=?");
+    $stmt->bind_param("ssssssii", $_POST['movie_title'], $_POST['genre'], $_POST['status'], $_POST['rating'], $_POST['description'], $cover_url, $_POST['id'], $user_id);
     $stmt->execute();
-    header("Location: index.php");
+    header("Location: index.php?edited=1");
     exit();
 }
 
-/* DELETE SINGLE */
-if(isset($_GET['delete_id'])){
+/* ── DELETE SINGLE ── */
+if (isset($_GET['delete_id'])) {
+    $sel = $conn->prepare("SELECT cover_url FROM movie_watchlist WHERE watchlist_id=? AND user_id=?");
+    $sel->bind_param("ii", $_GET['delete_id'], $user_id);
+    $sel->execute();
+    $row = $sel->get_result()->fetch_assoc();
+    if ($row && $row['cover_url'] && strpos($row['cover_url'], 'assets/covers/') !== false) {
+        $path = __DIR__ . '/' . $row['cover_url'];
+        if (file_exists($path)) unlink($path);
+    }
     $stmt = $conn->prepare("DELETE FROM movie_watchlist WHERE watchlist_id=? AND user_id=?");
     $stmt->bind_param("ii", $_GET['delete_id'], $user_id);
     $stmt->execute();
@@ -37,8 +82,17 @@ if(isset($_GET['delete_id'])){
     exit();
 }
 
-/* DELETE ALL */
-if(isset($_POST['delete_all'])){
+/* ── DELETE ALL ── */
+if (isset($_POST['delete_all'])) {
+    $sel = $conn->prepare("SELECT cover_url FROM movie_watchlist WHERE user_id=?");
+    $sel->bind_param("i", $user_id);
+    $sel->execute();
+    foreach ($sel->get_result()->fetch_all(MYSQLI_ASSOC) as $r) {
+        if ($r['cover_url'] && strpos($r['cover_url'], 'assets/covers/') !== false) {
+            $p = __DIR__ . '/' . $r['cover_url'];
+            if (file_exists($p)) unlink($p);
+        }
+    }
     $stmt = $conn->prepare("DELETE FROM movie_watchlist WHERE user_id=?");
     $stmt->bind_param("i", $user_id);
     $stmt->execute();
@@ -46,1034 +100,688 @@ if(isset($_POST['delete_all'])){
     exit();
 }
 
-// SEARCH + FILTER + SORT
-$search        = $_GET['search'] ?? "";
-$status_filter = $_GET['status'] ?? "";
-$genre_filter  = $_GET['genre']  ?? "";
-$sort          = $_GET['sort']   ?? "recent";
+/* ── FETCH MOVIES ── */
+$search        = isset($_GET['search']) ? '%' . $_GET['search'] . '%' : '%';
+$status_filter = isset($_GET['status']) && $_GET['status'] !== '' ? $_GET['status'] : null;
+$genre_filter  = isset($_GET['genre'])  && $_GET['genre']  !== '' ? $_GET['genre']  : null;
+$sort          = isset($_GET['sort']) ? $_GET['sort'] : 'newest';
+$order_clause  = $sort==='oldest' ? 'date_added ASC' : ($sort==='rating' ? 'rating DESC' : 'date_added DESC');
 
-$query  = "SELECT * FROM movie_watchlist WHERE user_id=?";
-$params = [$user_id];
-$types  = "i";
+$query  = "SELECT * FROM movie_watchlist WHERE user_id=? AND movie_title LIKE ?";
+$params = [$user_id, $search]; $types = "is";
+if ($status_filter) { $query.=" AND status=?"; $params[]=$status_filter; $types.="s"; }
+if ($genre_filter)  { $query.=" AND genre=?";  $params[]=$genre_filter;  $types.="s"; }
+$query .= " ORDER BY $order_clause";
+$stmt = $conn->prepare($query); $stmt->bind_param($types, ...$params); $stmt->execute();
+$movies = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-if (!empty($search)) {
-    $query .= " AND movie_title LIKE ?";
-    $params[] = "%$search%";
-    $types .= "s";
-}
-if (!empty($status_filter)) {
-    $query .= " AND status=?";
-    $params[] = $status_filter;
-    $types .= "s";
-}
-if (!empty($genre_filter)) {
-    $query .= " AND genre=?";
-    $params[] = $genre_filter;
-    $types .= "s";
-}
-
-switch ($sort) {
-    case "rating":  $query .= " ORDER BY rating DESC"; break;
-    case "title":   $query .= " ORDER BY movie_title ASC"; break;
-    case "oldest":  $query .= " ORDER BY date_added ASC"; break;
-    default:        $query .= " ORDER BY date_added DESC";
-}
-
-$stmt = $conn->prepare($query);
-$stmt->bind_param($types, ...$params);
-$stmt->execute();
-$result = $stmt->get_result();
-
-// STATS
-$total = $watched = $watching = $unwatched = $rating_sum = $rating_count = 0;
-$data  = [];
-
-while ($row = $result->fetch_assoc()) {
-    $data[] = $row;
+/* STATS */
+$total=$cnt=$sum=0; $watched=$watching=0;
+foreach ($movies as $m) {
     $total++;
-    if ($row['status'] == 'watched')   $watched++;
-    if ($row['status'] == 'watching')  $watching++;
-    if ($row['status'] == 'unwatched') $unwatched++;
-    if (!empty($row['rating'])) { $rating_sum += $row['rating']; $rating_count++; }
+    if ($m['status']==='Watched')  $watched++;
+    if ($m['status']==='Watching') $watching++;
+    if ($m['rating']>0) { $sum+=$m['rating']; $cnt++; }
 }
+$avg_rating = $cnt>0 ? round($sum/$cnt,1) : 0;
 
-$avg       = $rating_count ? round($rating_sum / $rating_count, 1) : "—";
-$watch_pct = $total ? round(($watched / $total) * 100) : 0;
+/* GENRES */
+$gs = $conn->prepare("SELECT DISTINCT genre FROM movie_watchlist WHERE user_id=?");
+$gs->bind_param("i",$user_id); $gs->execute();
+$genres = $gs->get_result()->fetch_all(MYSQLI_ASSOC);
 
-// Fetch all genres for filter dropdown (unfiltered)
-$gstmt = $conn->prepare("SELECT DISTINCT genre FROM movie_watchlist WHERE user_id=? AND genre != '' ORDER BY genre");
-$gstmt->bind_param("i", $user_id);
-$gstmt->execute();
-$gresult    = $gstmt->get_result();
-$all_genres = [];
-while ($g = $gresult->fetch_assoc()) $all_genres[] = $g['genre'];
+/* GROUP BY STATUS */
+$by_status=[];
+foreach ($movies as $m) $by_status[$m['status']][]=$m;
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cinema Vault — My Watchlist</title>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+<title>Cinema Vault — <?= htmlspecialchars($username) ?>'s Watchlist</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
-/* ─── RESET & BASE ─────────────────────────────────── */
-*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+:root{--black:#0a0a0a;--dark:#141414;--surface:#1a1a1a;--card:#222;--border:#2a2a2a;--red:#e50914;--red-hover:#f40612;--gold:#f5c518;--text:#e5e5e5;--muted:#777;--white:#fff;--radius:6px;}
+*{margin:0;padding:0;box-sizing:border-box;}html{scroll-behavior:smooth;}
+body{background:var(--black);color:var(--text);font-family:'Outfit',sans-serif;min-height:100vh;overflow-x:hidden;}
+::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:#333;border-radius:3px;}
 
-:root {
-    --gold:       #d4a853;
-    --gold-light: #e8c87a;
-    --gold-dim:   rgba(212,168,83,0.15);
-    --bg:         #080810;
-    --surface:    #0f0f1a;
-    --surface2:   #161625;
-    --surface3:   #1e1e30;
-    --border:     rgba(212,168,83,0.12);
-    --text:       #e8e6e0;
-    --muted:      #7a7898;
-    --watched:    #22c55e;
-    --watching:   #f59e0b;
-    --unwatched:  #6366f1;
-    --danger:     #ef4444;
-    --radius:     14px;
-    --shadow:     0 8px 32px rgba(0,0,0,0.6);
+/* NAVBAR */
+.navbar{position:fixed;top:0;left:0;right:0;z-index:900;padding:0 4%;height:68px;display:flex;align-items:center;justify-content:space-between;background:linear-gradient(to bottom,rgba(0,0,0,.95),rgba(0,0,0,0));transition:background .3s;}
+.navbar.scrolled{background:rgba(10,10,10,.97);box-shadow:0 2px 20px rgba(0,0,0,.5);}
+.nav-logo{font-family:'Bebas Neue',sans-serif;font-size:2rem;color:var(--red);letter-spacing:2px;text-decoration:none;}
+.nav-right{display:flex;align-items:center;gap:12px;}
+.nav-user{font-size:.85rem;color:var(--muted);}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 18px;border-radius:var(--radius);font-family:'Outfit',sans-serif;font-size:.875rem;font-weight:600;cursor:pointer;border:none;transition:all .2s;text-decoration:none;}
+.btn-red{background:var(--red);color:#fff;}.btn-red:hover{background:var(--red-hover);transform:translateY(-1px);}
+.btn-outline{background:transparent;color:var(--text);border:1px solid rgba(255,255,255,.3);}.btn-outline:hover{border-color:rgba(255,255,255,.7);background:rgba(255,255,255,.08);}
+.btn-ghost{background:transparent;color:var(--muted);border:none;font-size:.8rem;padding:6px 12px;}.btn-ghost:hover{color:var(--text);}
+
+/* HERO */
+.hero{padding:120px 4% 60px;position:relative;overflow:hidden;}
+.hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 20% 50%,rgba(229,9,20,.08),transparent 60%),radial-gradient(ellipse at 80% 20%,rgba(245,197,24,.04),transparent 50%);pointer-events:none;}
+.hero-title{font-family:'Bebas Neue',sans-serif;font-size:clamp(2rem,4vw,3.2rem);letter-spacing:3px;color:var(--white);margin-bottom:4px;}
+.hero-sub{font-size:.95rem;color:var(--muted);}.hero-sub span{color:var(--gold);font-weight:600;}
+
+/* STATS */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:0 4% 40px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px 24px;position:relative;overflow:hidden;}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--red);}
+.stat-label{font-size:.7rem;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;}
+.stat-value{font-family:'Bebas Neue',sans-serif;font-size:2.8rem;color:var(--white);line-height:1;}
+.stat-sub{font-size:.75rem;color:var(--muted);margin-top:4px;}
+
+/* FILTER */
+.filter-bar{padding:0 4% 32px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.search-wrap{flex:1;min-width:200px;position:relative;}
+.search-wrap input{width:100%;padding:10px 16px 10px 40px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:'Outfit',sans-serif;font-size:.9rem;outline:none;transition:border .2s;}
+.search-wrap input:focus{border-color:var(--red);}
+.search-wrap::before{content:'🔍';position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:.85rem;}
+.filter-bar select{padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:'Outfit',sans-serif;font-size:.85rem;cursor:pointer;outline:none;}
+.filter-bar select:focus{border-color:var(--red);}
+
+/* ROW */
+.section{padding:0 4% 48px;}
+.section-header{display:flex;align-items:center;gap:16px;margin-bottom:18px;}
+.section-title{font-family:'Bebas Neue',sans-serif;font-size:1.5rem;letter-spacing:1px;color:var(--white);}
+.section-count{font-size:.75rem;color:var(--muted);background:var(--surface);padding:3px 10px;border-radius:20px;}
+.row-wrap{position:relative;}
+.row{display:flex;gap:10px;overflow-x:auto;padding-bottom:12px;scroll-behavior:smooth;scrollbar-width:none;}
+.row::-webkit-scrollbar{display:none;}
+.row-btn{position:absolute;top:50%;transform:translateY(-60%);z-index:10;width:40px;height:80px;background:rgba(20,20,20,.8);border:none;color:#fff;cursor:pointer;font-size:1.4rem;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);transition:background .2s;}
+.row-btn:hover{background:rgba(40,40,40,.95);}
+.row-btn-left{left:-8px;border-radius:0 var(--radius) var(--radius) 0;}
+.row-btn-right{right:-8px;border-radius:var(--radius) 0 0 var(--radius);}
+
+/* CARD */
+.movie-card{flex:0 0 180px;position:relative;border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:transform .3s,z-index 0s .3s;}
+.movie-card:hover{transform:scale(1.08);z-index:10;transition:transform .3s,z-index 0s;}
+.movie-poster{width:100%;aspect-ratio:2/3;object-fit:cover;}
+.movie-poster-placeholder{width:100%;aspect-ratio:2/3;background:linear-gradient(135deg,#1a1a2e,#16213e 50%,#0f3460);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;}
+.movie-poster-placeholder .icon{font-size:3rem;opacity:.4;}
+.movie-poster-placeholder .ptitle{font-size:.75rem;color:rgba(255,255,255,.3);text-align:center;padding:0 8px;}
+.card-overlay{position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,.95),rgba(0,0,0,.4) 50%,transparent);display:flex;flex-direction:column;justify-content:flex-end;padding:12px;opacity:0;transition:opacity .3s;}
+.movie-card:hover .card-overlay{opacity:1;}
+.card-title{font-size:.82rem;font-weight:700;color:#fff;margin-bottom:4px;line-height:1.2;}
+.card-genre{font-size:.68rem;color:var(--muted);margin-bottom:8px;}
+.card-actions{display:flex;gap:6px;}
+.card-btn{flex:1;padding:5px;border:none;border-radius:3px;font-size:.7rem;font-weight:600;cursor:pointer;transition:all .15s;font-family:'Outfit',sans-serif;}
+.card-btn-play{background:var(--white);color:#000;}.card-btn-play:hover{background:#ddd;}
+.card-btn-edit{background:rgba(255,255,255,.15);color:#fff;}.card-btn-edit:hover{background:rgba(255,255,255,.25);}
+.card-btn-del{background:rgba(229,9,20,.6);color:#fff;padding:5px 7px;flex:0;}.card-btn-del:hover{background:var(--red);}
+.card-status-badge{position:absolute;top:8px;left:8px;padding:2px 8px;border-radius:3px;font-size:.6rem;font-weight:700;letter-spacing:.5px;text-transform:uppercase;}
+.badge-watching{background:var(--red);color:#fff;}
+.badge-watched{background:#1db954;color:#fff;}
+.badge-plan{background:rgba(255,255,255,.15);color:#fff;backdrop-filter:blur(4px);}
+.card-rating{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.7);padding:2px 6px;border-radius:3px;font-size:.65rem;color:var(--gold);font-weight:700;backdrop-filter:blur(4px);}
+
+/* EMPTY */
+.empty-state{text-align:center;padding:60px 20px;color:var(--muted);}
+.empty-state .big-icon{font-size:4rem;margin-bottom:16px;opacity:.3;}
+.empty-state h3{font-size:1.1rem;color:var(--text);margin-bottom:8px;}
+
+/* MODAL */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1000;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .3s;backdrop-filter:blur(4px);}
+.modal-backdrop.open{opacity:1;pointer-events:all;}
+.modal{background:var(--surface);border-radius:10px;width:min(560px,95vw);max-height:90vh;overflow-y:auto;position:relative;transform:scale(.95) translateY(20px);transition:transform .3s;border:1px solid var(--border);}
+.modal-backdrop.open .modal{transform:scale(1) translateY(0);}
+.detail-modal{background:var(--dark);border-radius:10px;width:min(700px,95vw);max-height:90vh;overflow-y:auto;position:relative;transform:scale(.95) translateY(20px);transition:transform .3s;border:1px solid var(--border);}
+.modal-backdrop.open .detail-modal{transform:scale(1) translateY(0);}
+.detail-hero{position:relative;height:320px;overflow:hidden;border-radius:10px 10px 0 0;}
+.detail-hero img{width:100%;height:100%;object-fit:cover;}
+.detail-hero-bg{width:100%;height:100%;background:linear-gradient(135deg,#0d0d1a,#1a0a0a);display:flex;align-items:center;justify-content:center;font-size:6rem;opacity:.3;}
+.detail-hero-overlay{position:absolute;inset:0;background:linear-gradient(to top,var(--dark),transparent 60%);}
+.detail-hero-content{position:absolute;bottom:0;left:0;right:0;padding:24px 28px;}
+.detail-title{font-family:'Bebas Neue',sans-serif;font-size:2.4rem;color:#fff;letter-spacing:2px;}
+.detail-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+.detail-tag{background:rgba(255,255,255,.1);padding:3px 10px;border-radius:3px;font-size:.72rem;color:rgba(255,255,255,.8);}
+.detail-body{padding:24px 28px 28px;}
+.detail-desc{font-size:.9rem;color:var(--muted);line-height:1.7;margin-bottom:20px;}
+.detail-stars{display:flex;gap:3px;margin-bottom:20px;}
+.star{font-size:1.2rem;color:var(--border);}.star.filled{color:var(--gold);}
+.detail-actions{display:flex;gap:10px;}
+
+/* FORM */
+.modal-header{padding:24px 28px 0;display:flex;align-items:center;justify-content:space-between;}
+.modal-title{font-family:'Bebas Neue',sans-serif;font-size:1.6rem;letter-spacing:1px;color:var(--white);}
+.modal-close{background:none;border:none;color:var(--muted);font-size:1.4rem;cursor:pointer;padding:4px;line-height:1;}.modal-close:hover{color:var(--white);}
+.modal-body{padding:20px 28px 28px;}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.form-full{grid-column:1/-1;}
+.form-group{display:flex;flex-direction:column;gap:6px;}
+.form-group label{font-size:.75rem;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);}
+.form-group input,.form-group select,.form-group textarea{padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:'Outfit',sans-serif;font-size:.9rem;outline:none;transition:border .2s;}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--red);}
+.form-group textarea{resize:vertical;min-height:80px;}
+.star-picker{display:flex;gap:6px;}
+.star-picker .star{font-size:1.6rem;cursor:pointer;color:var(--border);transition:color .1s;}
+.star-picker .star:hover,.star-picker .star.active{color:var(--gold);}
+
+/* ── UPLOAD ZONE ── */
+.upload-zone{
+  position:relative; border:2px dashed var(--border); border-radius:var(--radius);
+  background:var(--card); cursor:pointer; overflow:hidden;
+  min-height:170px; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:8px;
+  transition:border-color .2s, background .2s;
 }
+.upload-zone:hover,.upload-zone.drag-over{border-color:var(--red);background:rgba(229,9,20,.05);}
+.upload-zone input[type="file"]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;padding:0!important;border:none!important;background:transparent!important;}
+.uz-icon{font-size:2.4rem;pointer-events:none;}
+.uz-label{font-size:.85rem;color:var(--muted);text-align:center;pointer-events:none;}
+.uz-label span{color:var(--red);font-weight:600;}
+.uz-hint{font-size:.72rem;color:#555;pointer-events:none;}
+.uz-preview{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;}
+.uz-preview img{width:100%;height:100%;object-fit:cover;}
+.uz-change{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.75);color:#fff;font-size:.75rem;text-align:center;padding:7px;opacity:0;transition:opacity .2s;pointer-events:none;font-family:'Outfit',sans-serif;}
+.upload-zone:hover .uz-change{opacity:1;}
+.uz-remove{position:absolute;top:8px;right:8px;z-index:5;background:rgba(229,9,20,.85);color:#fff;border:none;border-radius:50%;width:28px;height:28px;font-size:.8rem;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.uz-remove:hover{background:var(--red);}
 
-html { scroll-behavior: smooth; }
+/* CONFIRM */
+.confirm-modal{padding:32px;text-align:center;}
+.confirm-modal .icon{font-size:3rem;margin-bottom:12px;}
+.confirm-modal h3{font-size:1.2rem;color:var(--white);margin-bottom:8px;}
+.confirm-modal p{font-size:.85rem;color:var(--muted);margin-bottom:24px;}
+.confirm-actions{display:flex;gap:10px;justify-content:center;}
 
-body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Outfit', sans-serif;
-    font-weight: 400;
-    min-height: 100vh;
-    overflow-x: hidden;
-}
+/* TOAST */
+.toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%) translateY(100px);background:var(--surface);color:var(--text);padding:12px 24px;border-radius:40px;font-size:.85rem;border:1px solid var(--border);z-index:2000;transition:transform .3s;box-shadow:0 8px 32px rgba(0,0,0,.5);}
+.toast.show{transform:translateX(-50%) translateY(0);}
 
-/* ─── GRAIN OVERLAY ────────────────────────────────── */
-body::before {
-    content:'';
-    position:fixed;
-    inset:0;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
-    pointer-events:none;
-    z-index:0;
-    opacity:.5;
-}
+/* VIEW TOGGLE */
+.view-toggle{display:flex;gap:4px;background:var(--surface);padding:4px;border-radius:var(--radius);}
+.view-btn{padding:6px 10px;border:none;background:none;color:var(--muted);cursor:pointer;border-radius:4px;font-size:.9rem;}
+.view-btn.active{background:var(--card);color:var(--white);}
 
-/* ─── AMBIENT GLOW ─────────────────────────────────── */
-.glow-orb {
-    position:fixed;
-    border-radius:50%;
-    filter:blur(120px);
-    pointer-events:none;
-    z-index:0;
-    opacity:.18;
-}
-.glow-orb-1 { width:600px; height:600px; background:var(--gold); top:-200px; left:-150px; }
-.glow-orb-2 { width:400px; height:400px; background:#6c3db5; bottom:-100px; right:-100px; }
+/* GRID */
+.grid-section{padding:0 4% 48px;}
+.movie-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;}
 
-/* ─── LAYOUT ───────────────────────────────────────── */
-.app {
-    position: relative;
-    z-index: 1;
-    max-width: 1140px;
-    margin: 0 auto;
-    padding: 36px 20px 80px;
-}
-
-/* ─── HEADER ───────────────────────────────────────── */
-.header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
-    margin-bottom: 40px;
-    padding-bottom: 28px;
-    border-bottom: 1px solid var(--border);
-}
-
-.header-brand { display:flex; flex-direction:column; gap:6px; }
-
-.brand-label {
-    font-size: 10px;
-    letter-spacing: 4px;
-    text-transform: uppercase;
-    color: var(--gold);
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-.brand-label::before {
-    content:'';
-    display:inline-block;
-    width:20px; height:1px;
-    background:var(--gold);
-}
-
-.brand-title {
-    font-family: 'Playfair Display', serif;
-    font-size: clamp(32px, 5vw, 52px);
-    font-weight: 900;
-    line-height: 1;
-    background: linear-gradient(135deg, #fff 30%, var(--gold-light));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-
-.header-actions { display:flex; gap:10px; align-items:center; }
-
-/* ─── BUTTONS ──────────────────────────────────────── */
-.btn-primary {
-    background: linear-gradient(135deg, var(--gold), #b8892e);
-    color: #000;
-    padding: 11px 22px;
-    border-radius: var(--radius);
-    font-family: 'Outfit', sans-serif;
-    font-weight: 600;
-    font-size: 14px;
-    cursor: pointer;
-    border: none;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    transition: transform .2s, box-shadow .2s;
-    box-shadow: 0 4px 20px rgba(212,168,83,0.3);
-}
-.btn-primary:hover { transform:translateY(-2px); box-shadow:0 8px 28px rgba(212,168,83,0.45); }
-
-.btn-ghost {
-    background: var(--surface2);
-    color: var(--muted);
-    padding: 11px 18px;
-    border-radius: var(--radius);
-    font-family: 'Outfit', sans-serif;
-    font-weight: 500;
-    font-size: 13px;
-    cursor: pointer;
-    border: 1px solid var(--border);
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all .2s;
-}
-.btn-ghost:hover { color:var(--danger); border-color:rgba(239,68,68,.3); background:rgba(239,68,68,.06); }
-
-/* ─── STATS ────────────────────────────────────────── */
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-    margin-bottom: 28px;
-}
-
-.stat-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-    position: relative;
-    overflow: hidden;
-    transition: transform .2s;
-}
-.stat-card::after {
-    content:'';
-    position:absolute;
-    inset:0;
-    background: linear-gradient(135deg, rgba(212,168,83,0.04) 0%, transparent 60%);
-    pointer-events:none;
-}
-.stat-card:hover { transform: translateY(-3px); }
-
-.stat-label {
-    font-size: 11px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 10px;
-}
-
-.stat-value {
-    font-family: 'Playfair Display', serif;
-    font-size: 36px;
-    font-weight: 700;
-    color: var(--gold-light);
-    line-height: 1;
-}
-
-.stat-sub {
-    font-size: 12px;
-    color: var(--muted);
-    margin-top: 6px;
-}
-
-.stat-progress {
-    margin-top: 12px;
-    height: 3px;
-    background: var(--surface3);
-    border-radius: 99px;
-    overflow: hidden;
-}
-
-.stat-progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--gold), var(--gold-light));
-    border-radius: 99px;
-    transition: width .8s ease;
-}
-
-/* ─── TOOLBAR ──────────────────────────────────────── */
-.toolbar {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-}
-
-.toolbar input,
-.toolbar select {
-    padding: 11px 16px;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text);
-    font-family: 'Outfit', sans-serif;
-    font-size: 14px;
-    outline: none;
-    transition: border-color .2s, box-shadow .2s;
-    appearance: none;
-    -webkit-appearance: none;
-}
-.toolbar input { flex: 1; min-width: 180px; }
-.toolbar select { min-width: 150px; cursor: pointer; }
-.toolbar input:focus,
-.toolbar select:focus {
-    border-color: rgba(212,168,83,0.5);
-    box-shadow: 0 0 0 3px rgba(212,168,83,0.08);
-}
-.toolbar input::placeholder { color: var(--muted); }
-
-.toolbar-btn {
-    padding: 11px 18px;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--muted);
-    font-family: 'Outfit', sans-serif;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all .2s;
-    white-space: nowrap;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-}
-.toolbar-btn:hover, .toolbar-btn.active {
-    background: var(--gold-dim);
-    border-color: var(--gold);
-    color: var(--gold-light);
-}
-
-/* ─── RESULTS INFO ─────────────────────────────────── */
-.results-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 14px;
-    font-size: 13px;
-    color: var(--muted);
-}
-.results-count { color: var(--text); font-weight: 500; }
-
-/* ─── MOVIE CARDS ──────────────────────────────────── */
-.movies-list { display: flex; flex-direction: column; gap: 10px; }
-
-.movie-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 18px 22px;
-    display: flex;
-    align-items: center;
-    gap: 18px;
-    transition: transform .2s, border-color .2s, box-shadow .2s;
-    animation: fadeSlideIn .35s ease both;
-    position: relative;
-    overflow: hidden;
-}
-.movie-card::before {
-    content:'';
-    position:absolute;
-    left:0; top:0; bottom:0;
-    width: 3px;
-    border-radius: 3px 0 0 3px;
-}
-.movie-card.status-watched::before   { background: var(--watched); }
-.movie-card.status-watching::before  { background: var(--watching); }
-.movie-card.status-unwatched::before { background: var(--unwatched); }
-
-.movie-card:hover {
-    transform: translateX(4px);
-    border-color: rgba(212,168,83,0.25);
-    box-shadow: var(--shadow);
-}
-
-@keyframes fadeSlideIn {
-    from { opacity:0; transform:translateY(12px); }
-    to   { opacity:1; transform:translateY(0); }
-}
-
-.movie-rank {
-    font-family: 'Playfair Display', serif;
-    font-size: 22px;
-    color: var(--surface3);
-    min-width: 32px;
-    font-weight: 700;
-    text-align: center;
-}
-
-.movie-info { flex: 1; min-width: 0; }
-
-.movie-title {
-    font-size: 16px;
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-bottom: 6px;
-    cursor: pointer;
-    transition: color .2s;
-}
-.movie-title:hover { color: var(--gold-light); }
-
-/* ── FIX 1: Restored .movie-meta and .genre-tag
-   (was broken by Git merge conflict markers) ───────── */
-.movie-meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.genre-tag {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    padding: 3px 10px;
-    border-radius: 99px;
-    font-size: 11px;
-    color: var(--muted);
-    font-weight: 500;
-    letter-spacing: .5px;
-}
-
-.status-badge {
-    padding: 3px 10px;
-    border-radius: 99px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: .5px;
-    text-transform: uppercase;
-}
-.status-badge.watched   { background:rgba(34,197,94,.15);  color:#4ade80; }
-.status-badge.watching  { background:rgba(245,158,11,.15); color:#fbbf24; }
-.status-badge.unwatched { background:rgba(99,102,241,.15); color:#818cf8; }
-
-.movie-date { font-size: 11px; color: var(--muted); }
-
-.movie-rating {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    min-width: 80px;
-    justify-content: flex-end;
-}
-
-.rating-stars { display: flex; gap: 2px; }
-
-.star {
-    width: 10px; height: 10px;
-    fill: var(--gold);
-    opacity: .25;
-}
-.star.lit { opacity: 1; }
-
-.rating-num {
-    font-family: 'Playfair Display', serif;
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--gold-light);
-    min-width: 32px;
-    text-align: right;
-}
-
-.movie-actions { display: flex; gap: 8px; }
-
-.card-btn {
-    padding: 7px 14px;
-    border-radius: 10px;
-    font-family: 'Outfit', sans-serif;
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    text-decoration: none;
-    border: 1px solid transparent;
-    transition: all .2s;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-}
-.card-btn-edit {
-    background: var(--surface2);
-    color: var(--text);
-    border-color: var(--border);
-}
-.card-btn-edit:hover { background: var(--surface3); border-color: var(--gold); color: var(--gold-light); }
-
-.card-btn-del {
-    background: transparent;
-    color: var(--muted);
-    border-color: var(--border);
-}
-.card-btn-del:hover { background:rgba(239,68,68,.1); border-color:rgba(239,68,68,.4); color:var(--danger); }
-
-/* ─── EMPTY STATE ──────────────────────────────────── */
-.empty {
-    text-align: center;
-    padding: 80px 20px;
-    color: var(--muted);
-}
-.empty-icon { font-size: 56px; margin-bottom: 16px; opacity:.5; }
-.empty h3 { font-family: 'Playfair Display', serif; font-size: 22px; color: var(--text); margin-bottom: 8px; }
-.empty p { font-size: 14px; }
-
-/* ─── MODALS ───────────────────────────────────────── */
-/* FIX 2: Use display:none by default, toggled via .open class.
-   z-index raised above glow orbs (z-index:0) and app (z-index:1) */
-.modal-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.82);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    z-index: 1000;          /* well above everything */
-    justify-content: center;
-    align-items: center;
-    padding: 20px;
-}
-.modal-overlay.open {
-    display: flex;           /* flex only when open */
-}
-
-.modal {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    width: 100%;
-    max-width: 440px;
-    padding: 32px;
-    animation: modalIn .3s cubic-bezier(.34,1.56,.64,1);
-    box-shadow: 0 24px 80px rgba(0,0,0,0.8);
-    position: relative;
-    /* Ensure modal itself never overflows the viewport */
-    max-height: 90vh;
-    overflow-y: auto;
-}
-
-@keyframes modalIn {
-    from { opacity:0; transform:scale(.92) translateY(20px); }
-    to   { opacity:1; transform:scale(1) translateY(0); }
-}
-
-.modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 24px;
-}
-
-.modal-title {
-    font-family: 'Playfair Display', serif;
-    font-size: 22px;
-    font-weight: 700;
-}
-
-.modal-close {
-    width: 32px; height: 32px;
-    border-radius: 50%;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    transition: all .2s;
-    flex-shrink: 0;
-}
-.modal-close:hover { color: var(--text); background: var(--surface3); }
-
-.form-group { margin-bottom: 16px; }
-
-.form-label {
-    display: block;
-    font-size: 12px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 7px;
-    font-weight: 500;
-}
-
-.form-input,
-.form-select {
-    width: 100%;
-    padding: 12px 16px;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    color: var(--text);
-    font-family: 'Outfit', sans-serif;
-    font-size: 14px;
-    outline: none;
-    transition: border-color .2s, box-shadow .2s;
-    appearance: none;
-    -webkit-appearance: none;
-}
-.form-input:focus, .form-select:focus {
-    border-color: var(--gold);
-    box-shadow: 0 0 0 3px rgba(212,168,83,0.1);
-}
-.form-input::placeholder { color: var(--muted); }
-
-.star-picker {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-    flex-wrap: wrap;
-}
-.star-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 22px;
-    opacity: .3;
-    transition: opacity .15s, transform .15s;
-    line-height: 1;
-    color: var(--gold);
-}
-.star-btn:hover, .star-btn.on { opacity: 1; transform: scale(1.1); }
-
-.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-
-.modal-footer { display: flex; gap: 10px; margin-top: 24px; }
-.modal-footer .btn-primary { flex: 1; justify-content: center; padding: 13px; }
-.modal-footer .btn-cancel {
-    padding: 13px 20px;
-    border-radius: var(--radius);
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    cursor: pointer;
-    font-family: 'Outfit', sans-serif;
-    font-size: 14px;
-    transition: all .2s;
-}
-.modal-footer .btn-cancel:hover { color: var(--text); }
-
-/* ─── CONFIRM MODAL ────────────────────────────────── */
-.confirm-icon  { font-size: 40px; text-align: center; margin-bottom: 12px; }
-.confirm-text  { text-align: center; color: var(--muted); font-size: 14px; margin-bottom: 4px; }
-.confirm-title { text-align: center; font-family: 'Playfair Display', serif; font-size: 20px; margin-bottom: 8px; }
-
-/* ─── SCROLLBAR ────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 99px; }
-
-/* ─── RESPONSIVE ───────────────────────────────────── */
 @media(max-width:768px){
-    .stats-grid { grid-template-columns: repeat(2,1fr); }
-    .header { flex-direction:column; align-items:flex-start; gap:16px; }
-    .movie-rank { display:none; }
-    .movie-rating { display:none; }
-}
-@media(max-width:480px){
-    .stats-grid { grid-template-columns: repeat(2,1fr); }
-    .toolbar { flex-direction:column; }
-    .toolbar input, .toolbar select { min-width:100%; }
-    .form-row { grid-template-columns: 1fr; }
+  .stats{grid-template-columns:repeat(2,1fr);}
+  .form-grid{grid-template-columns:1fr;}
+  .detail-title{font-size:1.8rem;}
+  .movie-card{flex:0 0 140px;}
 }
 </style>
 </head>
 <body>
 
-<!-- Ambient glow -->
-<div class="glow-orb glow-orb-1"></div>
-<div class="glow-orb glow-orb-2"></div>
-
-<div class="app">
-
-    <!-- ── HEADER ── -->
-    <div class="header">
-        <div class="header-brand">
-            <div class="brand-label">Cinema Vault</div>
-            <div class="brand-title">My Watchlist</div>
-            <div class="welcome-user">
-                Welcome back, <span style="color:var(--gold-light);font-weight:600;"><?= htmlspecialchars($username) ?></span>!
-            </div>
-        </div>
-        <div class="header-actions">
-            <button class="btn-primary" onclick="openModal('addModal')">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Add Movie
-            </button>
-            <?php if($total > 0): ?>
-            <button class="btn-ghost" onclick="openModal('deleteAllModal')">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
-                Clear All
-            </button>
-            <?php endif; ?>
-            <button class="btn-ghost" onclick="openModal('logoutModal')">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-                Logout
-            </button>
-        </div>
+<nav class="navbar" id="navbar">
+  <a class="nav-logo" href="index.php">CINEMA VAULT</a>
+  <div class="nav-right">
+    <span class="nav-user">👤 <?= htmlspecialchars($username) ?></span>
+    <div class="view-toggle">
+      <button class="view-btn active" id="btnNetflix" onclick="setView('netflix')">▤ Rows</button>
+      <button class="view-btn" id="btnGrid"    onclick="setView('grid')">⊞ Grid</button>
     </div>
+    <button class="btn btn-red" onclick="openAddModal()">+ Add Movie</button>
+    <button class="btn btn-outline" onclick="openModal('clearAllModal')">Clear All</button>
+    <a class="btn btn-ghost" href="logout.php">Logout</a>
+  </div>
+</nav>
 
-    <!-- ── STATS ── -->
-    <div class="stats-grid">
-        <div class="stat-card">
-            <div class="stat-label">Total Films</div>
-            <div class="stat-value"><?= $total ?></div>
-            <div class="stat-sub">In your vault</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Watched</div>
-            <div class="stat-value"><?= $watched ?></div>
-            <div class="stat-sub"><?= $watch_pct ?>% completion</div>
-            <div class="stat-progress"><div class="stat-progress-fill" style="width:<?= $watch_pct ?>%"></div></div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Watching Now</div>
-            <div class="stat-value"><?= $watching ?></div>
-            <div class="stat-sub">In progress</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Avg Rating</div>
-            <div class="stat-value"><?= $avg ?></div>
-            <div class="stat-sub"><?= $rating_count ?> rated films</div>
-        </div>
+<div class="hero">
+  <h1 class="hero-title">My Watchlist</h1>
+  <p class="hero-sub">Welcome back, <span><?= htmlspecialchars($username) ?></span>!</p>
+</div>
+
+<div class="stats">
+  <div class="stat-card">
+    <div class="stat-label">Total Films</div>
+    <div class="stat-value"><?= $total ?></div>
+    <div class="stat-sub">In your vault</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Watched</div>
+    <div class="stat-value"><?= $watched ?></div>
+    <div class="stat-sub"><?= $total>0?round($watched/$total*100):0 ?>% completion</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Watching Now</div>
+    <div class="stat-value"><?= $watching ?></div>
+    <div class="stat-sub">In progress</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Avg Rating</div>
+    <div class="stat-value"><?= $avg_rating?:'—' ?></div>
+    <div class="stat-sub"><?= $cnt ?> rated films</div>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar" id="filterForm">
+  <div class="search-wrap">
+    <input type="text" name="search" placeholder="Search titles..." value="<?= htmlspecialchars($_GET['search']??'') ?>" oninput="debounce()" autocomplete="off">
+  </div>
+  <select name="status" onchange="this.form.submit()">
+    <option value="">All Statuses</option>
+    <option value="Watching"      <?= ($_GET['status']??'')==='Watching'     ?'selected':'' ?>>Watching</option>
+    <option value="Watched"       <?= ($_GET['status']??'')==='Watched'      ?'selected':'' ?>>Watched</option>
+    <option value="Plan to Watch" <?= ($_GET['status']??'')==='Plan to Watch'?'selected':'' ?>>Plan to Watch</option>
+  </select>
+  <select name="genre" onchange="this.form.submit()">
+    <option value="">All Genres</option>
+    <?php foreach($genres as $g): ?>
+    <option value="<?= htmlspecialchars($g['genre']) ?>" <?= ($_GET['genre']??'')===$g['genre']?'selected':'' ?>><?= htmlspecialchars($g['genre']) ?></option>
+    <?php endforeach; ?>
+  </select>
+  <select name="sort" onchange="this.form.submit()">
+    <option value="newest" <?= ($_GET['sort']??'')==='newest'?'selected':'' ?>>Newest First</option>
+    <option value="oldest" <?= ($_GET['sort']??'')==='oldest'?'selected':'' ?>>Oldest First</option>
+    <option value="rating" <?= ($_GET['sort']??'')==='rating'?'selected':'' ?>>Top Rated</option>
+  </select>
+  <span style="font-size:.82rem;color:var(--muted);"><?= $total ?> films found</span>
+</form>
+
+<?php
+function renderCard($movie){
+  $bid='badge-'.strtolower(str_replace([' ','/'],'',$movie['status']));
+  if(strpos($bid,'plantowatch')!==false)$bid='badge-plan';
+  $mj  = htmlspecialchars(json_encode($movie),ENT_QUOTES);
+  $ts  = htmlspecialchars($movie['movie_title'],ENT_QUOTES);
+  $cov = htmlspecialchars($movie['cover_url']??'');
+  $rt  = (int)$movie['rating'];
+  ob_start(); ?>
+<div class="movie-card" onclick="openDetail(<?= $mj ?>)">
+  <?php if($cov): ?>
+    <img src="<?= $cov ?>" alt="" class="movie-poster" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+    <div class="movie-poster-placeholder" style="display:none"><div class="icon">🎬</div><div class="ptitle"><?= htmlspecialchars($movie['movie_title']) ?></div></div>
+  <?php else: ?>
+    <div class="movie-poster-placeholder"><div class="icon">🎬</div><div class="ptitle"><?= htmlspecialchars($movie['movie_title']) ?></div></div>
+  <?php endif; ?>
+  <span class="card-status-badge <?= $bid ?>"><?= htmlspecialchars($movie['status']) ?></span>
+  <?php if($rt): ?><span class="card-rating">★ <?= $rt ?></span><?php endif; ?>
+  <div class="card-overlay">
+    <div class="card-title"><?= htmlspecialchars($movie['movie_title']) ?></div>
+    <div class="card-genre"><?= htmlspecialchars($movie['genre']) ?></div>
+    <div class="card-actions">
+      <button class="card-btn card-btn-play" onclick="event.stopPropagation();openDetail(<?= $mj ?>)">▶ Info</button>
+      <button class="card-btn card-btn-edit" onclick="event.stopPropagation();openEditModal(<?= $mj ?>)">✎ Edit</button>
+      <button class="card-btn card-btn-del"  onclick="event.stopPropagation();confirmDel(<?= $movie['watchlist_id'] ?>,'<?= $ts ?>')">✕</button>
     </div>
+  </div>
+</div>
+<?php return ob_get_clean(); }
+?>
 
-    <!-- ── TOOLBAR ── -->
-    <form method="GET" class="toolbar" id="filterForm">
-        <input type="text" name="search" placeholder="🔍  Search titles..." value="<?= htmlspecialchars($search) ?>" oninput="this.form.submit()">
-
-        <select name="status" onchange="this.form.submit()">
-            <option value="">All Statuses</option>
-            <option value="watched"   <?= $status_filter=='watched'  ?'selected':'' ?>>✅ Watched</option>
-            <option value="watching"  <?= $status_filter=='watching' ?'selected':'' ?>>▶️ Watching</option>
-            <option value="unwatched" <?= $status_filter=='unwatched'?'selected':'' ?>>📋 Unwatched</option>
-        </select>
-
-        <select name="genre" onchange="this.form.submit()">
-            <option value="">All Genres</option>
-            <?php foreach($all_genres as $g): ?>
-            <option value="<?= htmlspecialchars($g) ?>" <?= $genre_filter==$g?'selected':'' ?>><?= htmlspecialchars($g) ?></option>
-            <?php endforeach; ?>
-        </select>
-
-        <select name="sort" onchange="this.form.submit()">
-            <option value="recent" <?= $sort=='recent'?'selected':'' ?>>🕐 Newest First</option>
-            <option value="oldest" <?= $sort=='oldest'?'selected':'' ?>>🕰 Oldest First</option>
-            <option value="rating" <?= $sort=='rating'?'selected':'' ?>>⭐ Top Rated</option>
-            <option value="title"  <?= $sort=='title' ?'selected':'' ?>>🔤 A–Z</option>
-        </select>
-
-        <?php if($search || $status_filter || $genre_filter): ?>
-        <a href="index.php" class="toolbar-btn">✕ Clear</a>
-        <?php endif; ?>
-    </form>
-
-    <!-- ── RESULTS BAR ── -->
-    <div class="results-bar">
-        <span><span class="results-count"><?= count($data) ?></span> <?= count($data)==1?'film':'films' ?> found</span>
-        <?php if($search || $status_filter || $genre_filter): ?>
-        <span>Filtered results</span>
-        <?php endif; ?>
+<!-- NETFLIX ROWS -->
+<div id="netflix-view">
+<?php if(empty($movies)): ?>
+  <div class="empty-state"><div class="big-icon">🎬</div><h3>Your vault is empty</h3><p>Click "+ Add Movie" to get started.</p></div>
+<?php else: ?>
+  <?php $rl=['Watching'=>'🔴 Currently Watching','Watched'=>'✅ Watched','Plan to Watch'=>'📌 Plan to Watch'];
+  foreach($rl as $sk=>$label):
+    if(empty($by_status[$sk]))continue;
+    $rid='row-'.md5($sk); ?>
+  <div class="section">
+    <div class="section-header">
+      <h2 class="section-title"><?= $label ?></h2>
+      <span class="section-count"><?= count($by_status[$sk]) ?></span>
     </div>
-
-    <!-- ── MOVIES LIST ── -->
-    <div class="movies-list">
-        <?php if(empty($data)): ?>
-        <div class="empty">
-            <div class="empty-icon">🎬</div>
-            <h3>No films here</h3>
-            <p>Add your first movie to start building your vault.</p>
-        </div>
-        <?php else: ?>
-        <?php foreach ($data as $i => $row): ?>
-        <div class="movie-card status-<?= $row['status'] ?>" style="animation-delay:<?= $i * 0.04 ?>s">
-
-            <div class="movie-rank"><?= str_pad($i+1, 2, '0', STR_PAD_LEFT) ?></div>
-
-            <div class="movie-info">
-                <div class="movie-title"><?= htmlspecialchars($row['movie_title']) ?></div>
-                <div class="movie-meta">
-                    <?php if(!empty($row['genre'])): ?>
-                    <span class="genre-tag"><?= htmlspecialchars($row['genre']) ?></span>
-                    <?php endif; ?>
-                    <span class="status-badge <?= $row['status'] ?>"><?= ucfirst($row['status']) ?></span>
-                    <span class="movie-date"><?= date('M j, Y', strtotime($row['date_added'])) ?></span>
-                </div>
-            </div>
-
-            <div class="movie-rating">
-                <?php if(!empty($row['rating'])): ?>
-                <div class="rating-stars">
-                    <?php for($s=1;$s<=5;$s++): $lit = ($s <= round($row['rating']/2)); ?>
-                    <svg class="star <?= $lit?'lit':'' ?>" viewBox="0 0 24 24">
-                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-                    </svg>
-                    <?php endfor; ?>
-                </div>
-                <span class="rating-num"><?= $row['rating'] ?></span>
-                <?php else: ?>
-                <span style="color:var(--muted);font-size:12px;">—</span>
-                <?php endif; ?>
-            </div>
-
-            <div class="movie-actions">
-                <button class="card-btn card-btn-edit" onclick="openEditModal(
-                    <?= $row['watchlist_id'] ?>,
-                    '<?= addslashes(htmlspecialchars($row['movie_title'])) ?>',
-                    '<?= addslashes(htmlspecialchars($row['genre'] ?? '')) ?>',
-                    '<?= $row['status'] ?>',
-                    '<?= $row['rating'] ?>'
-                )">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
-                        <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                    </svg>
-                    Edit
-                </button>
-                <a href="?delete_id=<?= $row['watchlist_id'] ?>" class="card-btn card-btn-del"
-                   onclick="return confirm('Remove \'<?= addslashes($row['movie_title']) ?>\' from your vault?')">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="3 6 5 6 21 6"/>
-                        <path d="M19 6l-1 14H6L5 6"/>
-                    </svg>
-                </a>
-            </div>
-        </div>
-        <?php endforeach; ?>
-        <?php endif; ?>
+    <div class="row-wrap">
+      <button class="row-btn row-btn-left"  onclick="scrollRow('<?= $rid ?>',-1)">&#8249;</button>
+      <div class="row" id="<?= $rid ?>">
+        <?php foreach($by_status[$sk] as $m) echo renderCard($m); ?>
+      </div>
+      <button class="row-btn row-btn-right" onclick="scrollRow('<?= $rid ?>',1)">&#8250;</button>
     </div>
+  </div>
+  <?php endforeach; ?>
+<?php endif; ?>
+</div>
 
-</div><!-- /.app -->
+<!-- GRID VIEW -->
+<div id="grid-view" style="display:none">
+<?php if(empty($movies)): ?>
+  <div class="empty-state"><div class="big-icon">🎬</div><h3>Your vault is empty</h3></div>
+<?php else: ?>
+  <div class="grid-section"><div class="movie-grid"><?php foreach($movies as $m) echo renderCard($m); ?></div></div>
+<?php endif; ?>
+</div>
 
+<!-- ════════ MODALS ════════ -->
 
-<!-- ══════════════════════════════════════════════════ -->
-<!--  ADD MODAL                                         -->
-<!-- ══════════════════════════════════════════════════ -->
-<div id="addModal" class="modal-overlay">
-<div class="modal">
+<!-- ADD MODAL -->
+<div class="modal-backdrop" id="addModal">
+  <div class="modal">
     <div class="modal-header">
-        <div class="modal-title">Add to Vault</div>
-        <button class="modal-close" onclick="closeModals()">✕</button>
+      <h2 class="modal-title">Add to Vault</h2>
+      <button class="modal-close" onclick="closeModal('addModal')">✕</button>
     </div>
-    <form method="POST">
-        <div class="form-group">
-            <label class="form-label">Movie Title</label>
-            <input class="form-input" name="movie_title" placeholder="e.g. Interstellar" required>
-        </div>
-        <div class="form-row">
-            <div class="form-group">
-                <label class="form-label">Genre</label>
-                <input class="form-input" name="genre" placeholder="e.g. Sci-Fi">
-            </div>
-            <div class="form-group">
-                <label class="form-label">Status</label>
-                <select class="form-select" name="status">
-                    <option value="unwatched">📋 Unwatched</option>
-                    <option value="watching">▶️ Watching</option>
-                    <option value="watched">✅ Watched</option>
-                </select>
-            </div>
-        </div>
-        <div class="form-group">
-            <label class="form-label">Rating (1–10)</label>
+    <div class="modal-body">
+      <form method="POST" enctype="multipart/form-data">
+        <input type="hidden" name="add_movie" value="1">
+        <div class="form-grid">
+          <div class="form-group form-full">
+            <label>Movie / Show Title</label>
+            <input type="text" name="movie_title" placeholder="e.g. One Piece" required>
+          </div>
+          <div class="form-group">
+            <label>Genre</label>
+            <select name="genre" required>
+              <option value="">Select...</option>
+              <option>Action</option><option>Adventure</option><option>Animation</option><option>Anime</option>
+              <option>Comedy</option><option>Crime</option><option>Documentary</option><option>Drama</option>
+              <option>Fantasy</option><option>Fiction</option><option>Horror</option>
+              <option>Romance</option><option>Sci-Fi</option><option>Thriller</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Status</label>
+            <select name="status" required>
+              <option value="Plan to Watch">Plan to Watch</option>
+              <option value="Watching">Watching</option>
+              <option value="Watched">Watched</option>
+            </select>
+          </div>
+          <div class="form-group form-full">
+            <label>Your Rating</label>
             <div class="star-picker" id="addStarPicker">
-                <?php for($s=1;$s<=10;$s++): ?>
-                <button type="button" class="star-btn" data-val="<?=$s?>" onclick="setRating('add',<?=$s?>)">★</button>
-                <?php endfor; ?>
+              <span class="star" onclick="setStars('add',1)">★</span>
+              <span class="star" onclick="setStars('add',2)">★</span>
+              <span class="star" onclick="setStars('add',3)">★</span>
+              <span class="star" onclick="setStars('add',4)">★</span>
+              <span class="star" onclick="setStars('add',5)">★</span>
             </div>
-            <input type="hidden" name="rating" id="addRatingVal">
+            <input type="hidden" name="rating" id="addRating" value="0">
+          </div>
+
+          <!-- ★ FILE UPLOAD ZONE ★ -->
+          <div class="form-group form-full">
+            <label>Cover Image — upload from your device</label>
+            <div class="upload-zone" id="addZone"
+                 ondragover="onDragOver(event,'addZone')"
+                 ondragleave="onDragLeave('addZone')"
+                 ondrop="onDrop(event,'addZone','addFile')">
+              <input type="file" id="addFile" name="cover_file" accept="image/*"
+                     onchange="onFileChosen(this,'addZone')">
+              <div class="uz-icon" id="addZone_icon">📁</div>
+              <div class="uz-label" id="addZone_label"><span>Click to choose a file</span> or drag &amp; drop here</div>
+              <div class="uz-hint" id="addZone_hint">JPG · PNG · WEBP · GIF &nbsp;|&nbsp; Max 5 MB</div>
+            </div>
+          </div>
+
+          <div class="form-group form-full">
+            <label>Description</label>
+            <textarea name="description" placeholder="Short synopsis or personal notes..."></textarea>
+          </div>
         </div>
-        <div class="modal-footer">
-            <button type="button" class="btn-cancel" onclick="closeModals()">Cancel</button>
-            <button class="btn-primary" name="add_movie" type="submit">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Save to Vault
-            </button>
-        </div>
-    </form>
-</div>
+        <button type="submit" class="btn btn-red" style="width:100%;margin-top:16px;justify-content:center;padding:12px;">+ Add to Vault</button>
+      </form>
+    </div>
+  </div>
 </div>
 
-
-<!-- ══════════════════════════════════════════════════ -->
-<!--  EDIT MODAL                                        -->
-<!-- ══════════════════════════════════════════════════ -->
-<div id="editModal" class="modal-overlay">
-<div class="modal">
+<!-- EDIT MODAL -->
+<div class="modal-backdrop" id="editModal">
+  <div class="modal">
     <div class="modal-header">
-        <div class="modal-title">Edit Film</div>
-        <button class="modal-close" onclick="closeModals()">✕</button>
+      <h2 class="modal-title">Edit Movie</h2>
+      <button class="modal-close" onclick="closeModal('editModal')">✕</button>
     </div>
-    <form method="POST">
-        <input type="hidden" name="id" id="edit_id">
-        <div class="form-group">
-            <label class="form-label">Movie Title</label>
-            <input class="form-input" name="movie_title" id="edit_title" required>
-        </div>
-        <div class="form-row">
-            <div class="form-group">
-                <label class="form-label">Genre</label>
-                <input class="form-input" name="genre" id="edit_genre">
-            </div>
-            <div class="form-group">
-                <label class="form-label">Status</label>
-                <select class="form-select" name="status" id="edit_status">
-                    <option value="unwatched">📋 Unwatched</option>
-                    <option value="watching">▶️ Watching</option>
-                    <option value="watched">✅ Watched</option>
-                </select>
-            </div>
-        </div>
-        <div class="form-group">
-            <label class="form-label">Rating (1–10)</label>
+    <div class="modal-body">
+      <form method="POST" enctype="multipart/form-data">
+        <input type="hidden" name="edit_movie" value="1">
+        <input type="hidden" name="id" id="editId">
+        <div class="form-grid">
+          <div class="form-group form-full">
+            <label>Movie / Show Title</label>
+            <input type="text" name="movie_title" id="editTitle" required>
+          </div>
+          <div class="form-group">
+            <label>Genre</label>
+            <select name="genre" id="editGenre">
+              <option>Action</option><option>Adventure</option><option>Animation</option><option>Anime</option>
+              <option>Comedy</option><option>Crime</option><option>Documentary</option><option>Drama</option>
+              <option>Fantasy</option><option>Fiction</option><option>Horror</option>
+              <option>Romance</option><option>Sci-Fi</option><option>Thriller</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Status</label>
+            <select name="status" id="editStatus">
+              <option value="Plan to Watch">Plan to Watch</option>
+              <option value="Watching">Watching</option>
+              <option value="Watched">Watched</option>
+            </select>
+          </div>
+          <div class="form-group form-full">
+            <label>Your Rating</label>
             <div class="star-picker" id="editStarPicker">
-                <?php for($s=1;$s<=10;$s++): ?>
-                <button type="button" class="star-btn" data-val="<?=$s?>" onclick="setRating('edit',<?=$s?>)">★</button>
-                <?php endfor; ?>
+              <span class="star" onclick="setStars('edit',1)">★</span>
+              <span class="star" onclick="setStars('edit',2)">★</span>
+              <span class="star" onclick="setStars('edit',3)">★</span>
+              <span class="star" onclick="setStars('edit',4)">★</span>
+              <span class="star" onclick="setStars('edit',5)">★</span>
             </div>
-            <input type="hidden" name="rating" id="editRatingVal">
+            <input type="hidden" name="rating" id="editRating" value="0">
+          </div>
+
+          <!-- ★ FILE UPLOAD ZONE ★ -->
+          <div class="form-group form-full">
+            <label>Cover Image <em style="text-transform:none;color:#555;font-style:normal;">— leave empty to keep current</em></label>
+            <div class="upload-zone" id="editZone"
+                 ondragover="onDragOver(event,'editZone')"
+                 ondragleave="onDragLeave('editZone')"
+                 ondrop="onDrop(event,'editZone','editFile')">
+              <input type="file" id="editFile" name="cover_file" accept="image/*"
+                     onchange="onFileChosen(this,'editZone')">
+              <div class="uz-icon" id="editZone_icon">📁</div>
+              <div class="uz-label" id="editZone_label"><span>Click to choose a file</span> or drag &amp; drop here</div>
+              <div class="uz-hint" id="editZone_hint">Upload a new image to replace the current cover</div>
+            </div>
+          </div>
+
+          <div class="form-group form-full">
+            <label>Description</label>
+            <textarea name="description" id="editDesc" placeholder="Short synopsis or personal notes..."></textarea>
+          </div>
         </div>
-        <div class="modal-footer">
-            <button type="button" class="btn-cancel" onclick="closeModals()">Cancel</button>
-            <button class="btn-primary" name="edit_movie" type="submit">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v13z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                Update Film
-            </button>
-        </div>
-    </form>
-</div>
-</div>
-
-
-<!-- ══════════════════════════════════════════════════ -->
-<!--  DELETE ALL MODAL                                  -->
-<!-- ══════════════════════════════════════════════════ -->
-<div id="deleteAllModal" class="modal-overlay">
-<div class="modal">
-    <div class="confirm-icon">🗑️</div>
-    <div class="confirm-title">Clear Entire Vault?</div>
-    <div class="confirm-text">This will permanently delete all <?= $total ?> film<?= $total!=1?'s':'' ?> from your watchlist. This cannot be undone.</div>
-    <form method="POST">
-        <div class="modal-footer" style="margin-top:24px;">
-            <button type="button" class="btn-cancel" onclick="closeModals()">Keep Films</button>
-            <button class="btn-primary" name="delete_all" type="submit"
-                    style="background:linear-gradient(135deg,#ef4444,#b91c1c);box-shadow:0 4px 20px rgba(239,68,68,0.3);">
-                Yes, Delete All
-            </button>
-        </div>
-    </form>
-</div>
-</div>
-
-
-<!-- ══════════════════════════════════════════════════ -->
-<!--  LOGOUT MODAL                                      -->
-<!-- ══════════════════════════════════════════════════ -->
-<div id="logoutModal" class="modal-overlay">
-<div class="modal">
-    <div class="confirm-icon">👋</div>
-    <div class="confirm-title">Leaving already?</div>
-    <div class="confirm-text">You'll need to log back in to access your vault.</div>
-    <div class="modal-footer" style="margin-top:24px;">
-        <button type="button" class="btn-cancel" onclick="closeModals()">Stay</button>
-        <a href="logout.php" class="btn-primary" style="text-align:center;justify-content:center;">Logout</a>
+        <button type="submit" class="btn btn-red" style="width:100%;margin-top:16px;justify-content:center;padding:12px;">Save Changes</button>
+      </form>
     </div>
-</div>
+  </div>
 </div>
 
+<!-- DETAIL MODAL -->
+<div class="modal-backdrop" id="detailModal">
+  <div class="detail-modal">
+    <button class="modal-close" onclick="closeModal('detailModal')" style="position:absolute;top:12px;right:14px;z-index:10;background:rgba(0,0,0,.6);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);">✕</button>
+    <div class="detail-hero" id="detailHero">
+      <div class="detail-hero-bg">🎬</div>
+      <div class="detail-hero-overlay"></div>
+      <div class="detail-hero-content">
+        <h2 class="detail-title" id="dTitle">—</h2>
+        <div class="detail-meta" id="dMeta"></div>
+      </div>
+    </div>
+    <div class="detail-body">
+      <div class="detail-stars" id="dStars"></div>
+      <p class="detail-desc"  id="dDesc">No description available.</p>
+      <div class="detail-actions" id="dActions"></div>
+    </div>
+  </div>
+</div>
+
+<!-- DELETE CONFIRM -->
+<div class="modal-backdrop" id="deleteModal">
+  <div class="modal" style="width:min(400px,90vw)">
+    <div class="confirm-modal">
+      <div class="icon">🗑</div>
+      <h3>Remove this film?</h3>
+      <p id="delMsg">This will permanently remove the film from your vault.</p>
+      <div class="confirm-actions">
+        <button class="btn btn-outline" onclick="closeModal('deleteModal')">Cancel</button>
+        <a class="btn btn-red" id="delLink">Remove</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CLEAR ALL CONFIRM -->
+<div class="modal-backdrop" id="clearAllModal">
+  <div class="modal" style="width:min(400px,90vw)">
+    <div class="confirm-modal">
+      <form method="POST">
+        <input type="hidden" name="delete_all" value="1">
+        <div class="icon">⚠️</div>
+        <h3>Clear entire vault?</h3>
+        <p>Permanently deletes ALL movies and their cover images. Cannot be undone.</p>
+        <div class="confirm-actions">
+          <button type="button" class="btn btn-outline" onclick="closeModal('clearAllModal')">Cancel</button>
+          <button type="submit" class="btn btn-red">Clear All</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
 
 <script>
-/* ── Modal helpers ─────────────────────────────────── */
-function openModal(id) {
-    document.getElementById(id).classList.add('open');
-    document.body.style.overflow = 'hidden';
+/* VIEW */
+function setView(v){
+  document.getElementById('netflix-view').style.display=v==='netflix'?'block':'none';
+  document.getElementById('grid-view').style.display   =v==='grid'?'block':'none';
+  document.getElementById('btnNetflix').classList.toggle('active',v==='netflix');
+  document.getElementById('btnGrid').classList.toggle('active',v==='grid');
+  localStorage.setItem('cv_view',v);
 }
-function closeModals() {
-    document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('open'));
-    document.body.style.overflow = '';
-}
+(()=>{const s=localStorage.getItem('cv_view');if(s)setView(s);})();
 
-// Close on backdrop click
-document.querySelectorAll('.modal-overlay').forEach(overlay => {
-    overlay.addEventListener('click', e => {
-        if (e.target === overlay) closeModals();
-    });
-});
+window.addEventListener('scroll',()=>document.getElementById('navbar').classList.toggle('scrolled',scrollY>10));
+function scrollRow(id,d){document.getElementById(id).scrollBy({left:d*600,behavior:'smooth'});}
 
-// Close on Escape key
-document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeModals();
-});
+/* MODALS */
+function openModal(id){document.getElementById(id).classList.add('open');document.body.style.overflow='hidden';}
+function closeModal(id){document.getElementById(id).classList.remove('open');document.body.style.overflow='';}
+document.querySelectorAll('.modal-backdrop').forEach(el=>el.addEventListener('click',e=>{if(e.target===el)closeModal(el.id);}));
+document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-backdrop.open').forEach(m=>closeModal(m.id));});
 
-/* ── Open edit modal ───────────────────────────────── */
-function openEditModal(id, title, genre, status, rating) {
-    document.getElementById('edit_id').value     = id;
-    document.getElementById('edit_title').value  = title;
-    document.getElementById('edit_genre').value  = genre;
-    document.getElementById('edit_status').value = status;
-    setRating('edit', parseInt(rating) || 0);
-    openModal('editModal');
+function openAddModal(){
+  resetZone('addZone','addFile');
+  setStars('add',0);
+  openModal('addModal');
 }
 
-/* ── Star rating picker ────────────────────────────── */
-function setRating(prefix, val) {
-    const picker = document.getElementById(prefix + 'StarPicker');
-    const hidden = document.getElementById(prefix + 'RatingVal');
-    hidden.value = val;
-    picker.querySelectorAll('.star-btn').forEach(btn => {
-        btn.classList.toggle('on', parseInt(btn.dataset.val) <= val);
-    });
+function openEditModal(m){
+  document.getElementById('editId').value    = m.watchlist_id;
+  document.getElementById('editTitle').value = m.movie_title;
+  document.getElementById('editDesc').value  = m.description||'';
+  document.getElementById('editGenre').value = m.genre;
+  document.getElementById('editStatus').value= m.status;
+  setStars('edit',parseInt(m.rating)||0);
+  resetZone('editZone','editFile');
+  // Show existing cover thumbnail inside zone as hint
+  if(m.cover_url){ showZonePreview('editZone','editFile',m.cover_url,false); }
+  openModal('editModal');
 }
 
-// Hover preview for star pickers
-document.querySelectorAll('.star-picker').forEach(picker => {
-    const prefix = picker.id.replace('StarPicker', '').toLowerCase();
-    picker.querySelectorAll('.star-btn').forEach(btn => {
-        btn.addEventListener('mouseenter', () => {
-            const hover = parseInt(btn.dataset.val);
-            picker.querySelectorAll('.star-btn').forEach(b => {
-                b.style.opacity = parseInt(b.dataset.val) <= hover ? '1' : '0.3';
-            });
-        });
-        btn.addEventListener('mouseleave', () => {
-            const current = parseInt(document.getElementById(prefix + 'RatingVal').value) || 0;
-            picker.querySelectorAll('.star-btn').forEach(b => {
-                b.style.opacity = parseInt(b.dataset.val) <= current ? '1' : '0.3';
-            });
-        });
-    });
-});
+function openDetail(m){
+  const hero=document.getElementById('detailHero');
+  hero.innerHTML='';
+  if(m.cover_url){
+    const img=document.createElement('img');img.src=m.cover_url;img.alt=m.movie_title;
+    img.onerror=()=>{img.style.display='none';addBg();};hero.appendChild(img);
+  }else{addBg();}
+  function addBg(){const b=document.createElement('div');b.className='detail-hero-bg';b.textContent='🎬';hero.appendChild(b);}
+  const ov=document.createElement('div');ov.className='detail-hero-overlay';hero.appendChild(ov);
+  const ct=document.createElement('div');ct.className='detail-hero-content';hero.appendChild(ct);
+  ct.innerHTML=`<h2 class="detail-title">${esc(m.movie_title)}</h2><div id="_dm" class="detail-meta"></div>`;
+  [m.genre,m.status,m.date_added?new Date(m.date_added).getFullYear():''].filter(Boolean)
+    .forEach(t=>{const s=document.createElement('span');s.className='detail-tag';s.textContent=t;ct.querySelector('#_dm').appendChild(s);});
+  let st='';for(let i=1;i<=5;i++)st+=`<span class="star ${i<=(parseInt(m.rating)||0)?'filled':''}">★</span>`;
+  document.getElementById('dStars').innerHTML=st;
+  document.getElementById('dDesc').textContent=m.description||'No description available.';
+  const mj=escA(JSON.stringify(m));
+  document.getElementById('dActions').innerHTML=`
+    <button class="btn btn-red" onclick="closeModal('detailModal');openEditModal(${mj})">✎ Edit</button>
+    <button class="btn btn-outline" onclick="closeModal('detailModal');confirmDel(${m.watchlist_id},'${escA(m.movie_title)}')">🗑 Remove</button>`;
+  openModal('detailModal');
+}
+
+function esc(s){const d=document.createElement('div');d.appendChild(document.createTextNode(s||''));return d.innerHTML;}
+function escA(s){return(s||'').replace(/\\/g,'\\\\').replace(/"/g,'&quot;').replace(/'/g,"&#39;");}
+
+/* STARS */
+function setStars(px,val){
+  document.getElementById(px+'Rating').value=val;
+  document.querySelectorAll('#'+px+'StarPicker .star').forEach((s,i)=>{
+    s.style.color=i<val?'var(--gold)':'var(--border)';s.classList.toggle('active',i<val);
+  });
+}
+
+/* ── UPLOAD ZONE LOGIC ── */
+function resetZone(zoneId, fileId){
+  const z=document.getElementById(zoneId);
+  // Remove any preview
+  const pv=z.querySelector('.uz-preview'); if(pv)pv.remove();
+  const rb=z.querySelector('.uz-remove');  if(rb)rb.remove();
+  // Restore placeholders
+  z.querySelector('.uz-icon') .style.display='';
+  z.querySelector('.uz-label').style.display='';
+  z.querySelector('.uz-hint') .style.display='';
+  // Clear file input
+  const f=document.getElementById(fileId); if(f) f.value='';
+}
+
+function showZonePreview(zoneId, fileId, src, allowRemove=true){
+  const z=document.getElementById(zoneId);
+  // Hide placeholders
+  z.querySelector('.uz-icon') .style.display='none';
+  z.querySelector('.uz-label').style.display='none';
+  z.querySelector('.uz-hint') .style.display='none';
+  // Build preview
+  let pv=z.querySelector('.uz-preview');
+  if(!pv){pv=document.createElement('div');pv.className='uz-preview';z.appendChild(pv);}
+  pv.innerHTML=`<img src="${src}" alt="cover" onerror="this.src=''">
+    <div class="uz-change">📁 Click to choose a different image</div>`;
+  // Remove button
+  if(allowRemove){
+    let rb=z.querySelector('.uz-remove');
+    if(!rb){rb=document.createElement('button');rb.type='button';rb.className='uz-remove';z.appendChild(rb);}
+    rb.textContent='✕';
+    rb.onclick=e=>{e.stopPropagation();resetZone(zoneId,fileId);};
+  }
+}
+
+function onFileChosen(input, zoneId){
+  const file=input.files&&input.files[0];
+  if(!file)return;
+  if(!file.type.startsWith('image/')){alert('Please choose an image file (JPG, PNG, WEBP, GIF).');input.value='';return;}
+  if(file.size>5*1024*1024){alert('Image must be under 5 MB.');input.value='';return;}
+  const reader=new FileReader();
+  reader.onload=e=>showZonePreview(zoneId,input.id,e.target.result,true);
+  reader.readAsDataURL(file);
+}
+
+function onDragOver(e,zoneId){e.preventDefault();document.getElementById(zoneId).classList.add('drag-over');}
+function onDragLeave(zoneId){document.getElementById(zoneId).classList.remove('drag-over');}
+function onDrop(e,zoneId,fileId){
+  e.preventDefault();
+  document.getElementById(zoneId).classList.remove('drag-over');
+  const file=e.dataTransfer.files[0];if(!file)return;
+  const inp=document.getElementById(fileId);
+  const dt=new DataTransfer();dt.items.add(file);inp.files=dt.files;
+  onFileChosen(inp,zoneId);
+}
+
+/* DELETE */
+function confirmDel(id,title){
+  document.getElementById('delMsg').textContent=`Remove "${title}" from your vault?`;
+  document.getElementById('delLink').href=`?delete_id=${id}`;
+  openModal('deleteModal');
+}
+
+/* SEARCH */
+let _dt;function debounce(){clearTimeout(_dt);_dt=setTimeout(()=>document.getElementById('filterForm').submit(),400);}
+
+/* TOAST */
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
+<?php if(isset($_GET['added'])): ?>toast('🎬 Movie added to your vault!');<?php endif; ?>
+<?php if(isset($_GET['edited'])): ?>toast('✅ Movie updated successfully!');<?php endif; ?>
 </script>
 </body>
 </html>
