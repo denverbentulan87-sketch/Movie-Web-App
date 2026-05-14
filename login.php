@@ -280,9 +280,43 @@ input:focus{
         <input type="text" name="username" required autofocus>
       </div>
       <div class="form-group">
-        <label>Password</label>
-        <input type="password" name="password" required>
-      </div>
+  <label>Password</label>
+
+  <div style="position:relative;">
+    <input type="password" name="password" id="password" required>
+
+    <button type="button" id="togglePassword"
+  style="
+    position:absolute;
+    right:16px;
+    top:50%;
+    transform:translateY(-50%);
+    background:none;
+    border:none;
+    cursor:pointer;
+    padding:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  ">
+
+  <svg id="eyeIcon" xmlns="http://www.w3.org/2000/svg"
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="#bdbdbd"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round">
+
+    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"></path>
+    <circle cx="12" cy="12" r="3"></circle>
+
+  </svg>
+</button>
+  </div>
+</div>
       <button type="submit" name="login" class="btn-submit">Sign In</button>
     </form>
     <div class="divider">— or —</div>
@@ -290,4 +324,37 @@ input:focus{
   </div>
 </div>
 </body>
+<script>
+const password = document.getElementById('password');
+const togglePassword = document.getElementById('togglePassword');
+const eyeIcon = document.getElementById('eyeIcon');
+
+togglePassword.addEventListener('click', function () {
+
+  const type =
+    password.getAttribute('type') === 'password'
+      ? 'text'
+      : 'password';
+
+  password.setAttribute('type', type);
+
+  if(type === 'text'){
+    eyeIcon.innerHTML = `
+      <path d="M17.94 17.94A10.94 10.94 0 0 1 12 19
+      c-7 0-11-7-11-7a21.77 21.77 0 0 1 5.06-5.94"></path>
+
+      <path d="M1 1l22 22"></path>
+
+      <path d="M9.53 9.53a3 3 0 0 0 4.24 4.24"></path>
+
+      <path d="M14.47 14.47L9.53 9.53"></path>
+    `;
+  } else {
+    eyeIcon.innerHTML = `
+      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    `;
+  }
+});
+</script>
 </html>
