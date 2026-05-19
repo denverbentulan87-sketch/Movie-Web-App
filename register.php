@@ -262,7 +262,7 @@ input:focus{
 </style>
 </head>
 <body>
-<nav class="nav"><a class="logo" href="landing_page.php">CINEMA VAULT</a></nav>
+<nav class="nav"><a class="logo" href="homepage.php">CINEMA VAULT</a></nav>
 <div class="center">
   <div class="card">
     <div class="card-top">Join Cinema Vault</div>
