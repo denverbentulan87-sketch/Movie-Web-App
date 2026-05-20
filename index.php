@@ -41,6 +41,16 @@ function handleUpload($field, $old_url = '') {
 
 /* ── ADD MOVIE ── */
 if (isset($_POST['add_movie'])) {
+    // ── DUPLICATE CHECK ──
+    $dup = $conn->prepare("SELECT watchlist_id FROM movie_watchlist WHERE user_id=? AND LOWER(TRIM(movie_title))=LOWER(TRIM(?))");
+    $dup->bind_param("is", $user_id, $_POST['movie_title']);
+    $dup->execute();
+    $dup->store_result();
+    if ($dup->num_rows > 0) {
+        header("Location: index.php?duplicate=1&title=" . urlencode($_POST['movie_title']));
+        exit();
+    }
+
     $cover_url = handleUpload('cover_file');
     $stmt = $conn->prepare("INSERT INTO movie_watchlist (user_id,movie_title,genre,status,rating,date_added,description,cover_url) VALUES (?,?,?,?,?,NOW(),?,?)");
     $stmt->bind_param("isssiss", $user_id, $_POST['movie_title'], $_POST['genre'], $_POST['status'], $_POST['rating'], $_POST['description'], $cover_url);
@@ -831,6 +841,24 @@ let _dt;function debounce(){clearTimeout(_dt);_dt=setTimeout(()=>document.getEle
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
 <?php if(isset($_GET['added'])): ?>toast('🎬 Movie added to your vault!');<?php endif; ?>
 <?php if(isset($_GET['edited'])): ?>toast('✅ Movie updated successfully!');<?php endif; ?>
+<?php if(isset($_GET['duplicate'])): ?>toast('⚠️ "<?= htmlspecialchars(addslashes($_GET['title'] ?? '')) ?>" is already in your vault!');<?php endif; ?>
+
+/* DUPLICATE GUARD — client-side pre-check */
+const _existingTitles = <?= json_encode(array_map(fn($m) => mb_strtolower(trim($m['movie_title'])), $movies)) ?>;
+
+document.querySelector('#addModal form').addEventListener('submit', function(e) {
+  const input = this.querySelector('[name="movie_title"]').value.trim().toLowerCase();
+  if (_existingTitles.includes(input)) {
+    e.preventDefault();
+    toast('⚠️ "' + this.querySelector('[name="movie_title"]').value.trim() + '" is already in your vault!');
+    // Shake the input for visual feedback
+    const inp = this.querySelector('[name="movie_title"]');
+    inp.style.transition = 'border-color .1s';
+    inp.style.borderColor = 'var(--red)';
+    inp.style.boxShadow = '0 0 0 2px rgba(229,9,20,.3)';
+    setTimeout(() => { inp.style.borderColor = ''; inp.style.boxShadow = ''; }, 2000);
+  }
+});
 </script>
 </body>
 </html>
