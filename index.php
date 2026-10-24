@@ -218,7 +218,7 @@ $row_defs = [
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cinema Vault — <?= $h($username) ?>'s Watchlist</title>
+<title>Cinema Vault - My Watchlist</title>
 <?php include 'includes/head.php'; ?>
 <link rel="stylesheet" href="assets/css/dashboard.css">
 </head>
@@ -251,7 +251,7 @@ $row_defs = [
 <header class="dash-hero">
   <div class="dash-hero-text">
     <p class="dash-kicker" id="greeting">Welcome back</p>
-    <h1 class="dash-title"><?= $h($username) ?>'s vault</h1>
+    <h1 class="dash-title"><?= $h($username) ?></h1>
     <p class="dash-sub">
       <?php if ($ov_total === 0): ?>
         Nothing here yet. Add the first film you want to remember.

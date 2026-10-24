@@ -2,11 +2,6 @@
 include 'db.php';
 session_start();
 
-/* ─────────────────────────────────────────────────────────────
-   AUTH (login + register now live in a modal on this page)
-   - Works with fetch() (JSON replies) and as a plain form POST
-     (full page reload) if JavaScript is unavailable.
-   ───────────────────────────────────────────────────────────── */
 $loggedIn  = isset($_SESSION['user_id']);
 $isAjax    = strtolower($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'xmlhttprequest';
 $authModal = '';          // 'login' | 'register' | ''  → which tab opens on load
@@ -105,7 +100,7 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cinema Vault — Your Personal Film Universe</title>
+<title>Cinema Vault - Your Personal Film Universe</title>
 <meta name="description" content="Track what you've watched, build the perfect watchlist and rate every film in one beautifully designed vault.">
 <?php include 'includes/head.php'; ?>
 <link rel="stylesheet" href="assets/css/landing.css">
@@ -195,14 +190,14 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
         <span class="poster-rate">★ 4.6</span>
       </div>
      </div>
-      <div class="chip chip-a"><svg class="i"><use href="#i-check-circle"/></svg> Watched · 247</div>
+      <div class="chip chip-a"><svg class="i"><use href="#i-check-circle"/></svg> Watched</div>
       <div class="chip chip-b"><svg class="i"><use href="#i-clock"/></svg> Watching now</div>
     </div>
   </div>
 
   <div class="hero-stats">
-    <div class="stat-item"><div class="stat-num"><span data-count="500" data-suffix="K+">500K+</span></div><div class="stat-label">Movies</div></div>
-    <div class="stat-item"><div class="stat-num"><span data-count="12" data-suffix="K+">12K+</span></div><div class="stat-label">Members</div></div>
+    <div class="stat-item"><div class="stat-num"><span data-count="10" data-suffix="+">10+</span></div><div class="stat-label">Movies</div></div>
+    <div class="stat-item"><div class="stat-num"><span data-count="12" data-suffix="+">100+</span></div><div class="stat-label">Members</div></div>
     <div class="stat-item"><div class="stat-num"><span data-count="4.9" data-decimals="1">4.9</span></div><div class="stat-label">Rating</div></div>
   </div>
 
@@ -353,8 +348,6 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
     <li><a href="#features">Features</a></li>
     <li><a href="#showcase">How It Works</a></li>
     <li><a href="#reviews">Reviews</a></li>
-    <li><a href="#">Privacy</a></li>
-    <li><a href="#">Terms</a></li>
   </ul>
   <span class="footer-copy">© 2026 Cinema Vault. All rights reserved.</span>
 </footer>
