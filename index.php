@@ -237,11 +237,10 @@ $row_defs = [
     <button type="button" class="btn btn-gold" data-open-add><svg class="i"><use href="#i-plus"/></svg><span class="lbl">Add Movie</span></button>
     <button type="button" class="btn btn-ghost-danger" data-open="clearAllModal" title="Clear all"><svg class="i"><use href="#i-trash"/></svg><span class="lbl">Clear All</span></button>
     <span class="nav-sep" aria-hidden="true"></span>
-    <button type="button" class="user-chip" data-open="logoutModal" title="Sign out">
+    <span class="user-pill" title="Signed in as <?= $h($username) ?>">
       <span class="avatar"><?= $h($initial) ?></span>
       <span class="user-name"><?= $h($username) ?></span>
-      <svg class="i"><use href="#i-logout"/></svg>
-    </button>
+    </span>
   </div>
 </nav>
 
@@ -251,7 +250,7 @@ $row_defs = [
 <header class="dash-hero">
   <div class="dash-hero-text">
     <p class="dash-kicker" id="greeting">Welcome back</p>
-    <h1 class="dash-title"><?= $h($username) ?></h1>
+    <h1 class="dash-title">My Watchlist</h1>
     <p class="dash-sub">
       <?php if ($ov_total === 0): ?>
         Nothing here yet. Add the first film you want to remember.
@@ -400,6 +399,14 @@ $row_defs = [
 </div>
 
 </main>
+<footer class="dash-footer">
+  <div class="dash-footer-user">
+    <span class="user-pill" title="Signed in as <?= $h($username) ?>">
+    <span class="avatar"><?= $h($initial) ?></span>
+    <span><strong><?= $h($username) ?></strong></span>
+  <button type="button" class="btn btn-logout" data-open="logoutModal"><svg class="i"><use href="#i-logout"/></svg> Log out</button>
+  </div>
+</footer>
 
 <button type="button" class="fab" data-open-add aria-label="Add movie"><svg class="i"><use href="#i-plus"/></svg></button>
 

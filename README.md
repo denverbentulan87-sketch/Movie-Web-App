@@ -10,9 +10,10 @@ A PHP + MySQL movie watchlist.
 ## Structure
 | File | Purpose |
 |---|---|
-| `homepage.php` | Landing page. Sign in and Create account are a modal here (handles the POSTs, fetch + no-JS fallback). |
+| `homepage.php` | Landing page and the Sign in / Create account modal (the forms post to the two endpoints below). |
 | `index.php` | Dashboard (watchlist, add/edit/delete, filters, stats). |
-| `login.php`, `register.php` | Redirect to the landing page and open the matching modal tab. |
+| `login.php` | Sign-in endpoint: validates, starts the session, replies JSON to the modal (fetch) or redirects back with a flash message (no JS). |
+| `register.php` | Registration endpoint: same pattern; creates the account. Opening either file directly just opens the modal. |
 | `logout.php` | Ends the session and returns to the landing page. |
 | `includes/head.php` | Favicons, fonts and shared stylesheet, used by every page. |
 | `includes/icons.php` | Inline SVG icon sprite (`<svg class="i"><use href="#i-film"/></svg>`). |

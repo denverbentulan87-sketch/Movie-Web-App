@@ -298,7 +298,7 @@
     btn.classList.add('loading'); btn.disabled = true;
 
     try {
-      const res  = await fetch('homepage.php', { method: 'POST', body: fd, credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      const res  = await fetch(form.getAttribute('action'), { method: 'POST', body: fd, credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
       const data = await res.json();
 
       if (data.ok && data.redirect) {

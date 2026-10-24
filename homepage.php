@@ -3,91 +3,20 @@ include 'db.php';
 session_start();
 
 $loggedIn  = isset($_SESSION['user_id']);
-$isAjax    = strtolower($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'xmlhttprequest';
-$authModal = '';          // 'login' | 'register' | ''  → which tab opens on load
+$authModal = '';          // 'login' | 'register' | ''  -> which tab opens on load
 $authError = '';
 $authNote  = '';
 $oldUser   = '';
 
-function auth_json(array $payload, int $status = 200): void {
-    http_response_code($status);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode($payload);
-    exit();
+if (!$loggedIn && isset($_SESSION['auth_flash'])) {
+    $flash     = $_SESSION['auth_flash'];
+    unset($_SESSION['auth_flash']);
+    $authModal = $flash['modal'] ?? '';
+    $authError = $flash['error'] ?? '';
+    $oldUser   = $flash['user']  ?? '';
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$loggedIn) {
-
-    /* ── LOGIN ── */
-    if (isset($_POST['login'])) {
-        $oldUser  = trim($_POST['username'] ?? '');
-        $password = $_POST['password'] ?? '';
-
-        $stmt = $conn->prepare("SELECT user_id, username, password FROM users WHERE username=?");
-        $stmt->bind_param("s", $oldUser);
-        $stmt->execute();
-        $row = $stmt->get_result()->fetch_assoc();
-
-        if ($row && password_verify($password, $row['password'])) {
-            session_regenerate_id(true);
-            $_SESSION['user_id']  = $row['user_id'];
-            $_SESSION['username'] = $row['username'];
-            if ($isAjax) auth_json(['ok' => true, 'redirect' => 'index.php']);
-            header("Location: index.php");
-            exit();
-        }
-        $authError = 'Invalid username or password.';
-        $authModal = 'login';
-        if ($isAjax) auth_json(['ok' => false, 'error' => $authError, 'field' => 'password'], 401);
-    }
-
-    /* ── REGISTER ── */
-    if (isset($_POST['register'])) {
-        $oldUser  = trim($_POST['username'] ?? '');
-        $password = $_POST['password'] ?? '';
-        $confirm  = $_POST['confirm']  ?? '';
-        $field    = '';
-
-        if (strlen($oldUser) < 3) {
-            $authError = 'Username must be at least 3 characters.'; $field = 'username';
-        } elseif (strlen($password) < 6) {
-            $authError = 'Password must be at least 6 characters.'; $field = 'password';
-        } elseif ($password !== $confirm) {
-            $authError = 'Passwords do not match.'; $field = 'confirm';
-        } else {
-            $check = $conn->prepare("SELECT user_id FROM users WHERE username=?");
-            $check->bind_param("s", $oldUser);
-            $check->execute();
-            if ($check->get_result()->num_rows > 0) {
-                $authError = 'Username already taken.'; $field = 'username';
-            } else {
-                $hash = password_hash($password, PASSWORD_DEFAULT);
-                $ins  = $conn->prepare("INSERT INTO users (username, password) VALUES (?,?)");
-                $ins->bind_param("ss", $oldUser, $hash);
-                $dupErr = false;
-                try {
-                    $created = $ins->execute();
-                    $dupErr  = !$created && $ins->errno === 1062;
-                } catch (mysqli_sql_exception $e) {      // PHP 8.1+ throws instead of returning false
-                    $created = false;
-                    $dupErr  = $e->getCode() === 1062;   // same name registered at the same moment
-                }
-                if ($created) {
-                    if ($isAjax) auth_json(['ok' => true, 'switch' => 'login', 'username' => $oldUser,
-                                            'message' => 'Account created. Sign in to open your vault.']);
-                    header("Location: homepage.php?registered=1");
-                    exit();
-                }
-                $authError = $dupErr ? 'Username already taken.' : 'Could not create the account. Please try again.';
-                $field = 'username';
-            }
-        }
-        $authModal = 'register';
-        if ($isAjax) auth_json(['ok' => false, 'error' => $authError, 'field' => $field], 422);
-    }
-}
-
-/* open the modal from links like homepage.php?modal=login (old login.php / register.php redirect here) */
+/* open the modal from links like homepage.php?modal=login */
 if (!$loggedIn && $authModal === '') {
     if (isset($_GET['registered'])) { $authModal = 'login'; $authNote = 'Account created. Sign in to open your vault.'; }
     elseif (($_GET['modal'] ?? '') === 'login')    $authModal = 'login';
@@ -175,19 +104,19 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
     <div class="hero-visual" id="heroVisual" aria-hidden="true">
      <div class="fan" id="fan">
       <div class="poster p1">
-        <svg class="i poster-icon"><use href="#i-compass"/></svg>
-        <span class="poster-title">Midnight<br>Reel</span>
+        <svg class="poster-art" aria-hidden="true"><use href="#art-midnight" width="100%" height="100%"/></svg>
         <span class="poster-rate">★ 4.8</span>
+        <span class="poster-title">Midnight<br>Reel</span>
       </div>
       <div class="poster p2">
-        <svg class="i poster-icon"><use href="#i-film"/></svg>
-        <span class="poster-title">The Last<br>Frame</span>
+        <svg class="poster-art" aria-hidden="true"><use href="#art-frame" width="100%" height="100%"/></svg>
         <span class="poster-rate">★ 5.0</span>
+        <span class="poster-title">The Last<br>Frame</span>
       </div>
       <div class="poster p3">
-        <svg class="i poster-icon"><use href="#i-star"/></svg>
-        <span class="poster-title">Golden<br>Hour</span>
+        <svg class="poster-art" aria-hidden="true"><use href="#art-golden" width="100%" height="100%"/></svg>
         <span class="poster-rate">★ 4.6</span>
+        <span class="poster-title">Golden<br>Hour</span>
       </div>
      </div>
       <div class="chip chip-a"><svg class="i"><use href="#i-check-circle"/></svg> Watched</div>
@@ -197,7 +126,7 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
 
   <div class="hero-stats">
     <div class="stat-item"><div class="stat-num"><span data-count="10" data-suffix="+">10+</span></div><div class="stat-label">Movies</div></div>
-    <div class="stat-item"><div class="stat-num"><span data-count="12" data-suffix="+">100+</span></div><div class="stat-label">Members</div></div>
+    <div class="stat-item"><div class="stat-num"><span data-count="12" data-suffix="+">12+</span></div><div class="stat-label">Members</div></div>
     <div class="stat-item"><div class="stat-num"><span data-count="4.9" data-decimals="1">4.9</span></div><div class="stat-label">Rating</div></div>
   </div>
 
@@ -265,12 +194,12 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
     </div>
 
     <div class="showcase-visual">
-      <div class="demo-back demo-back-1" aria-hidden="true"></div>
-      <div class="demo-back demo-back-2" aria-hidden="true"></div>
+      <div class="demo-back demo-back-1" aria-hidden="true"><svg class="poster-art" aria-hidden="true"><use href="#art-midnight" width="100%" height="100%"/></svg></div>
+      <div class="demo-back demo-back-2" aria-hidden="true"><svg class="poster-art" aria-hidden="true"><use href="#art-golden" width="100%" height="100%"/></svg></div>
 
       <div class="demo-card" id="demoCard" data-status="watching">
         <div class="demo-poster">
-          <svg class="i"><use href="#i-film"/></svg>
+          <svg class="demo-art" aria-hidden="true"><use href="#art-demo" width="100%" height="100%"/></svg>
           <span class="demo-badge" id="demoBadge">Watching</span>
         </div>
         <div class="demo-body">
@@ -391,7 +320,7 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
         <div class="form-msg ok" data-msg="login-ok" role="status" <?= $authNote ? '' : 'hidden' ?>><svg class="i"><use href="#i-check-circle"/></svg><span><?= $h($authNote) ?></span></div>
         <div class="form-msg error" data-msg="login" role="alert" <?= ($authError && $authModal==='login') ? '' : 'hidden' ?>><svg class="i"><use href="#i-alert"/></svg><span><?= $authModal==='login' ? $h($authError) : '' ?></span></div>
 
-        <form method="POST" action="homepage.php" id="loginForm" novalidate>
+        <form method="POST" action="login.php" id="loginForm" novalidate>
           <div class="field">
             <label for="loginUser">Username</label>
             <div class="input-wrap">
@@ -420,7 +349,7 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
 
         <div class="form-msg error" data-msg="register" role="alert" <?= ($authError && $authModal==='register') ? '' : 'hidden' ?>><svg class="i"><use href="#i-alert"/></svg><span><?= $authModal==='register' ? $h($authError) : '' ?></span></div>
 
-        <form method="POST" action="homepage.php" id="registerForm" novalidate>
+        <form method="POST" action="register.php" id="registerForm" novalidate>
           <div class="field">
             <label for="regUser">Username</label>
             <div class="input-wrap">
