@@ -6,7 +6,7 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 if (!isset($_SESSION['user_id'])) {
-    header("Location: login.php");
+    header("Location: homepage.php?modal=login");
     exit();
 }
 
@@ -49,6 +49,9 @@ if(isset($_POST['update'])){
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="assets/img/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32.png">
+<link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
 <title>Edit Movie</title>
 
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700&family=DM+Sans&display=swap" rel="stylesheet">

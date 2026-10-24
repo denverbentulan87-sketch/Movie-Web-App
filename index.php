@@ -143,722 +143,462 @@ $genres = $gs->get_result()->fetch_all(MYSQLI_ASSOC);
 /* GROUP BY STATUS */
 $by_status=[];
 foreach ($movies as $m) $by_status[$m['status']][]=$m;
+
+/* ── OVERALL STATS (stay stable while filters change) ── */
+$allq = $conn->prepare("SELECT movie_title, status, rating, genre FROM movie_watchlist WHERE user_id=?");
+$allq->bind_param("i", $user_id); $allq->execute();
+$allrows = $allq->get_result()->fetch_all(MYSQLI_ASSOC);
+$ov_total = count($allrows); $ov_watched = $ov_watching = $ov_plan = $ov_rated = $ov_sum = 0; $genre_counts = [];
+foreach ($allrows as $r) {
+    if ($r['status']==='Watched')       $ov_watched++;
+    elseif ($r['status']==='Watching')  $ov_watching++;
+    else                                $ov_plan++;
+    if ((int)$r['rating'] > 0) { $ov_rated++; $ov_sum += (int)$r['rating']; }
+    if ($r['genre'] !== null && $r['genre'] !== '') $genre_counts[$r['genre']] = ($genre_counts[$r['genre']] ?? 0) + 1;
+}
+$ov_avg   = $ov_rated > 0 ? round($ov_sum / $ov_rated, 1) : 0;
+$ov_pct   = $ov_total > 0 ? round($ov_watched / $ov_total * 100) : 0;
+arsort($genre_counts);
+$top_genres = array_slice($genre_counts, 0, 5, true);
+$top_max    = $top_genres ? max($top_genres) : 1;
+
+/* current filters + helper to build filter links */
+$f_search = trim($_GET['search'] ?? '');
+$f_status = $status_filter ?? '';
+$f_genre  = $genre_filter ?? '';
+function qs(array $over = []) {
+    $q = array_intersect_key($_GET, array_flip(['search','status','genre','sort']));
+    $q = array_merge($q, $over);
+    $q = array_filter($q, fn($v) => $v !== '' && $v !== null);
+    return 'index.php' . ($q ? '?' . http_build_query($q) : '');
+}
+$h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+$initial = mb_strtoupper(mb_substr($username, 0, 1));
+$json_flags = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+
+function statusClass($s) { return ['Watching'=>'watching','Watched'=>'watched'][$s] ?? 'plan'; }
+
+function renderCard($movie, $h) {
+    $cls = statusClass($movie['status']);
+    $cov = $movie['cover_url'] ?? '';
+    $rt  = (int)$movie['rating'];
+    ob_start(); ?>
+<article class="movie-card" tabindex="0" role="button" aria-label="<?= $h($movie['movie_title']) ?> — details"
+         data-title="<?= $h(mb_strtolower($movie['movie_title'])) ?>"
+         data-movie="<?= $h(json_encode($movie, JSON_UNESCAPED_UNICODE)) ?>">
+  <div class="poster-frame">
+    <?php if ($cov): ?>
+      <img src="<?= $h($cov) ?>" alt="" class="movie-poster" loading="lazy" onerror="this.remove()">
+    <?php endif; ?>
+    <div class="movie-poster-placeholder"><svg class="i"><use href="#i-film"/></svg><span><?= $h($movie['movie_title']) ?></span></div>
+  </div>
+  <span class="card-status-badge badge-<?= $cls ?>"><?= $h($movie['status']) ?></span>
+  <?php if ($rt): ?><span class="card-rating"><svg class="i i-fill"><use href="#i-star"/></svg><?= $rt ?></span><?php endif; ?>
+  <div class="card-overlay">
+    <div class="card-title"><?= $h($movie['movie_title']) ?></div>
+    <div class="card-genre"><?= $h($movie['genre']) ?></div>
+    <div class="card-actions">
+      <button type="button" class="card-btn card-btn-info" data-act="info"><svg class="i"><use href="#i-play"/></svg>Info</button>
+      <button type="button" class="card-btn card-btn-edit" data-act="edit" aria-label="Edit"><svg class="i"><use href="#i-edit"/></svg></button>
+      <button type="button" class="card-btn card-btn-del" data-act="del" aria-label="Remove"><svg class="i"><use href="#i-trash"/></svg></button>
+    </div>
+  </div>
+</article>
+<?php return ob_get_clean(); }
+
+$genre_options = ['Action','Adventure','Animation','Anime','Comedy','Crime','Documentary','Drama','Fantasy','Fiction','Horror','Romance','Sci-Fi','Thriller'];
+$row_defs = [
+  'Watching'      => ['Currently watching', 'clock'],
+  'Watched'       => ['Watched',            'check-circle'],
+  'Plan to Watch' => ['Plan to watch',      'bookmark'],
+];
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cinema Vault — <?= htmlspecialchars($username) ?>'s Watchlist</title>
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<style>
-:root{--black:#0a0a0a;--dark:#141414;--surface:#1a1a1a;--card:#222;--border:#2a2a2a;--red:#e50914;--red-hover:#f40612;--gold:#f5c518;--text:#e5e5e5;--muted:#777;--white:#fff;--radius:6px;--orange:#ff6b35;--orange-hover:#ff8555;}
-*{margin:0;padding:0;box-sizing:border-box;}html{scroll-behavior:smooth;}
-body{background:var(--black);color:var(--text);font-family:'Outfit',sans-serif;min-height:100vh;overflow-x:hidden;}
-::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:#333;border-radius:3px;}
-
-/* NAVBAR */
-.navbar{position:fixed;top:0;left:0;right:0;z-index:900;padding:0 4%;height:68px;display:flex;align-items:center;justify-content:space-between;background:linear-gradient(to bottom,rgba(0,0,0,.95),rgba(0,0,0,0));transition:background .3s;}
-.navbar.scrolled{background:rgba(10,10,10,.97);box-shadow:0 2px 20px rgba(0,0,0,.5);}
-.nav-logo{font-family:'Bebas Neue',sans-serif;font-size:2rem;color:var(--red);letter-spacing:2px;text-decoration:none;}
-.nav-right{display:flex;align-items:center;gap:12px;}
-.nav-user{font-size:.85rem;color:var(--muted);}
-.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 18px;border-radius:var(--radius);font-family:'Outfit',sans-serif;font-size:.875rem;font-weight:600;cursor:pointer;border:none;transition:all .2s;text-decoration:none;}
-.btn-red{background:var(--red);color:#fff;}.btn-red:hover{background:var(--red-hover);transform:translateY(-1px);}
-.btn-orange{background:var(--orange);color:#fff;}.btn-orange:hover{background:var(--orange-hover);transform:translateY(-1px);box-shadow:0 4px 15px rgba(255,107,53,.4);}
-.btn-outline{background:transparent;color:var(--text);border:1px solid rgba(255,255,255,.3);}.btn-outline:hover{border-color:rgba(255,255,255,.7);background:rgba(255,255,255,.08);}
-.btn-ghost{background:transparent;color:var(--muted);border:none;font-size:.8rem;padding:6px 12px;}.btn-ghost:hover{color:var(--text);}
-.btn-danger-outline{background:transparent;color:#ff4d4d;border:1.5px solid #ff4d4d;}.btn-danger-outline:hover{background:#ff4d4d;color:#fff;transform:translateY(-1px);}
-
-/* HERO */
-.hero{padding:120px 4% 60px;position:relative;overflow:hidden;}
-.hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 20% 50%,rgba(229,9,20,.08),transparent 60%),radial-gradient(ellipse at 80% 20%,rgba(245,197,24,.04),transparent 50%);pointer-events:none;}
-.hero-title{font-family:'Bebas Neue',sans-serif;font-size:clamp(2rem,4vw,3.2rem);letter-spacing:3px;color:var(--white);margin-bottom:4px;}
-.hero-sub{font-size:.95rem;color:var(--muted);}.hero-sub span{color:var(--gold);font-weight:600;}
-
-/* STATS */
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:0 4% 40px;}
-.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px 24px;position:relative;overflow:hidden;}
-.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--red);}
-.stat-label{font-size:.7rem;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;}
-.stat-value{font-family:'Bebas Neue',sans-serif;font-size:2.8rem;color:var(--white);line-height:1;}
-.stat-sub{font-size:.75rem;color:var(--muted);margin-top:4px;}
-
-/* FILTER */
-.filter-bar{padding:0 4% 32px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
-.search-wrap{flex:1;min-width:200px;position:relative;}
-.search-wrap input{width:100%;padding:10px 16px 10px 40px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:'Outfit',sans-serif;font-size:.9rem;outline:none;transition:border .2s;}
-.search-wrap input:focus{border-color:var(--red);}
-.search-wrap::before{content:'🔍';position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:.85rem;}
-.filter-bar select{padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:'Outfit',sans-serif;font-size:.85rem;cursor:pointer;outline:none;}
-.filter-bar select:focus{border-color:var(--red);}
-
-/* ROW */
-.section{padding:0 4% 48px;}
-.section-header{display:flex;align-items:center;gap:16px;margin-bottom:18px;}
-.section-title{font-family:'Bebas Neue',sans-serif;font-size:1.5rem;letter-spacing:1px;color:var(--white);}
-.section-count{font-size:.75rem;color:var(--muted);background:var(--surface);padding:3px 10px;border-radius:20px;}
-.row-wrap{position:relative;}
-.row{display:flex;gap:10px;overflow-x:auto;padding-bottom:12px;scroll-behavior:smooth;scrollbar-width:none;}
-.row::-webkit-scrollbar{display:none;}
-.row-btn{position:absolute;top:50%;transform:translateY(-60%);z-index:10;width:40px;height:80px;background:rgba(20,20,20,.8);border:none;color:#fff;cursor:pointer;font-size:1.4rem;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);transition:background .2s;}
-.row-btn:hover{background:rgba(40,40,40,.95);}
-.row-btn-left{left:-8px;border-radius:0 var(--radius) var(--radius) 0;}
-.row-btn-right{right:-8px;border-radius:var(--radius) 0 0 var(--radius);}
-
-/* CARD */
-.movie-card{flex:0 0 180px;position:relative;border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:transform .3s,z-index 0s .3s;}
-.movie-card:hover{transform:scale(1.08);z-index:10;transition:transform .3s,z-index 0s;}
-.movie-poster{width:100%;aspect-ratio:2/3;object-fit:cover;}
-.movie-poster-placeholder{width:100%;aspect-ratio:2/3;background:linear-gradient(135deg,#1a1a2e,#16213e 50%,#0f3460);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;}
-.movie-poster-placeholder .icon{font-size:3rem;opacity:.4;}
-.movie-poster-placeholder .ptitle{font-size:.75rem;color:rgba(255,255,255,.3);text-align:center;padding:0 8px;}
-.card-overlay{position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,.95),rgba(0,0,0,.4) 50%,transparent);display:flex;flex-direction:column;justify-content:flex-end;padding:12px;opacity:0;transition:opacity .3s;}
-.movie-card:hover .card-overlay{opacity:1;}
-.card-title{font-size:.82rem;font-weight:700;color:#fff;margin-bottom:4px;line-height:1.2;}
-.card-genre{font-size:.68rem;color:var(--muted);margin-bottom:8px;}
-.card-actions{display:flex;gap:6px;}
-.card-btn{flex:1;padding:5px;border:none;border-radius:3px;font-size:.7rem;font-weight:600;cursor:pointer;transition:all .15s;font-family:'Outfit',sans-serif;}
-.card-btn-play{background:var(--white);color:#000;}.card-btn-play:hover{background:#ddd;}
-.card-btn-edit{background:rgba(255,255,255,.15);color:#fff;}.card-btn-edit:hover{background:rgba(255,255,255,.25);}
-.card-btn-del{background:rgba(229,9,20,.6);color:#fff;padding:5px 7px;flex:0;}.card-btn-del:hover{background:var(--red);}
-.card-status-badge{position:absolute;top:8px;left:8px;padding:2px 8px;border-radius:3px;font-size:.6rem;font-weight:700;letter-spacing:.5px;text-transform:uppercase;}
-.badge-watching{background:var(--red);color:#fff;}
-.badge-watched{background:#1db954;color:#fff;}
-.badge-plan{background:rgba(255,255,255,.15);color:#fff;backdrop-filter:blur(4px);}
-.card-rating{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.7);padding:2px 6px;border-radius:3px;font-size:.65rem;color:var(--gold);font-weight:700;backdrop-filter:blur(4px);}
-
-/* EMPTY */
-.empty-state{text-align:center;padding:60px 20px;color:var(--muted);}
-.empty-state .big-icon{font-size:4rem;margin-bottom:16px;opacity:.3;}
-.empty-state h3{font-size:1.1rem;color:var(--text);margin-bottom:8px;}
-
-/* MODAL */
-.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1000;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .3s;backdrop-filter:blur(4px);}
-.modal-backdrop.open{opacity:1;pointer-events:all;}
-.modal{background:var(--surface);border-radius:10px;width:min(560px,95vw);max-height:90vh;overflow-y:auto;position:relative;transform:scale(.95) translateY(20px);transition:transform .3s;border:1px solid var(--border);}
-.modal-backdrop.open .modal{transform:scale(1) translateY(0);}
-.detail-modal{background:var(--dark);border-radius:10px;width:min(700px,95vw);max-height:90vh;overflow-y:auto;position:relative;transform:scale(.95) translateY(20px);transition:transform .3s;border:1px solid var(--border);}
-.modal-backdrop.open .detail-modal{transform:scale(1) translateY(0);}
-.detail-hero{position:relative;height:320px;overflow:hidden;border-radius:10px 10px 0 0;}
-.detail-hero img{width:100%;height:100%;object-fit:cover;}
-.detail-hero-bg{width:100%;height:100%;background:linear-gradient(135deg,#0d0d1a,#1a0a0a);display:flex;align-items:center;justify-content:center;font-size:6rem;opacity:.3;}
-.detail-hero-overlay{position:absolute;inset:0;background:linear-gradient(to top,var(--dark),transparent 60%);}
-.detail-hero-content{position:absolute;bottom:0;left:0;right:0;padding:24px 28px;}
-.detail-title{font-family:'Bebas Neue',sans-serif;font-size:2.4rem;color:#fff;letter-spacing:2px;}
-.detail-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
-.detail-tag{background:rgba(255,255,255,.1);padding:3px 10px;border-radius:3px;font-size:.72rem;color:rgba(255,255,255,.8);}
-.detail-body{padding:24px 28px 28px;}
-.detail-desc{font-size:.9rem;color:var(--muted);line-height:1.7;margin-bottom:20px;}
-.detail-stars{display:flex;gap:3px;margin-bottom:20px;}
-.star{font-size:1.2rem;color:var(--border);}.star.filled{color:var(--gold);}
-.detail-actions{display:flex;gap:10px;}
-
-/* FORM */
-.modal-header{padding:24px 28px 0;display:flex;align-items:center;justify-content:space-between;}
-.modal-title{font-family:'Bebas Neue',sans-serif;font-size:1.6rem;letter-spacing:1px;color:var(--white);}
-.modal-close{background:none;border:none;color:var(--muted);font-size:1.4rem;cursor:pointer;padding:4px;line-height:1;}.modal-close:hover{color:var(--white);}
-.modal-body{padding:20px 28px 28px;}
-.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-.form-full{grid-column:1/-1;}
-.form-group{display:flex;flex-direction:column;gap:6px;}
-.form-group label{font-size:.75rem;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);}
-.form-group input,.form-group select,.form-group textarea{padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:'Outfit',sans-serif;font-size:.9rem;outline:none;transition:border .2s;}
-.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--red);}
-.form-group textarea{resize:vertical;min-height:80px;}
-.star-picker{display:flex;gap:6px;}
-.star-picker .star{font-size:1.6rem;cursor:pointer;color:var(--border);transition:color .1s;}
-.star-picker .star:hover,.star-picker .star.active{color:var(--gold);}
-
-/* ── UPLOAD ZONE ── */
-.upload-zone{
-  position:relative; border:2px dashed var(--border); border-radius:var(--radius);
-  background:var(--card); cursor:pointer; overflow:hidden;
-  min-height:170px; display:flex; flex-direction:column;
-  align-items:center; justify-content:center; gap:8px;
-  transition:border-color .2s, background .2s;
-}
-.upload-zone:hover,.upload-zone.drag-over{border-color:var(--red);background:rgba(229,9,20,.05);}
-.upload-zone input[type="file"]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;padding:0!important;border:none!important;background:transparent!important;}
-.uz-icon{font-size:2.4rem;pointer-events:none;}
-.uz-label{font-size:.85rem;color:var(--muted);text-align:center;pointer-events:none;}
-.uz-label span{color:var(--red);font-weight:600;}
-.uz-hint{font-size:.72rem;color:#555;pointer-events:none;}
-.uz-preview{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;}
-.uz-preview img{width:100%;height:100%;object-fit:cover;}
-.uz-change{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.75);color:#fff;font-size:.75rem;text-align:center;padding:7px;opacity:0;transition:opacity .2s;pointer-events:none;font-family:'Outfit',sans-serif;}
-.upload-zone:hover .uz-change{opacity:1;}
-.uz-remove{position:absolute;top:8px;right:8px;z-index:5;background:rgba(229,9,20,.85);color:#fff;border:none;border-radius:50%;width:28px;height:28px;font-size:.8rem;cursor:pointer;display:flex;align-items:center;justify-content:center;}
-.uz-remove:hover{background:var(--red);}
-
-/* CONFIRM */
-.confirm-modal{padding:32px;text-align:center;}
-.confirm-modal .icon{font-size:3rem;margin-bottom:12px;}
-.confirm-modal h3{font-size:1.2rem;color:var(--white);margin-bottom:8px;}
-.confirm-modal p{font-size:.85rem;color:var(--muted);margin-bottom:24px;}
-.confirm-actions{display:flex;gap:10px;justify-content:center;}
-
-/* LOGOUT MODAL SPECIAL STYLING */
-.logout-confirm-modal{padding:36px 32px;}
-.logout-confirm-modal .logout-icon-wrap{
-  width:72px;height:72px;border-radius:50%;
-  background:linear-gradient(135deg,rgba(255,107,53,.2),rgba(229,9,20,.15));
-  border:2px solid rgba(255,107,53,.4);
-  display:flex;align-items:center;justify-content:center;
-  margin:0 auto 20px;font-size:2rem;
-}
-.logout-confirm-modal h3{font-size:1.35rem;color:var(--white);margin-bottom:10px;font-family:'Bebas Neue',sans-serif;letter-spacing:1px;}
-.logout-confirm-modal .user-badge{
-  display:inline-flex;align-items:center;gap:8px;
-  background:var(--card);border:1px solid var(--border);
-  border-radius:30px;padding:6px 16px;margin-bottom:20px;
-  font-size:.85rem;color:var(--muted);
-}
-.logout-confirm-modal .user-badge strong{color:var(--gold);}
-.logout-confirm-modal p{font-size:.875rem;color:var(--muted);margin-bottom:28px;line-height:1.6;}
-.logout-confirm-modal .confirm-actions{display:flex;gap:12px;justify-content:center;}
-
-/* TOAST */
-.toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%) translateY(100px);background:var(--surface);color:var(--text);padding:12px 24px;border-radius:40px;font-size:.85rem;border:1px solid var(--border);z-index:2000;transition:transform .3s;box-shadow:0 8px 32px rgba(0,0,0,.5);}
-.toast.show{transform:translateX(-50%) translateY(0);}
-
-/* VIEW TOGGLE */
-.view-toggle{display:flex;gap:4px;background:var(--surface);padding:4px;border-radius:var(--radius);}
-.view-btn{padding:6px 10px;border:none;background:none;color:var(--muted);cursor:pointer;border-radius:4px;font-size:.9rem;}
-.view-btn.active{background:var(--card);color:var(--white);}
-
-/* GRID */
-.grid-section{padding:0 4% 48px;}
-.movie-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;}
-
-@media(max-width:768px){
-  .stats{grid-template-columns:repeat(2,1fr);}
-  .form-grid{grid-template-columns:1fr;}
-  .detail-title{font-size:1.8rem;}
-  .movie-card{flex:0 0 140px;}
-  .logout-confirm-modal .confirm-actions{flex-direction:column;}
-}
-</style>
+<title>Cinema Vault — <?= $h($username) ?>'s Watchlist</title>
+<?php include 'includes/head.php'; ?>
+<link rel="stylesheet" href="assets/css/dashboard.css">
 </head>
-<body>
+<body class="dash">
+<?php include 'includes/icons.php'; ?>
 
-<nav class="navbar" id="navbar">
-  <a class="nav-logo" href="index.php">CINEMA VAULT</a>
+<!-- ══════════ NAV ══════════ -->
+<nav class="app-nav" id="navbar" aria-label="Main">
+  <a class="brand" href="index.php" aria-label="Cinema Vault — your vault"><svg class="brand-mark"><use href="#i-reel"/></svg><span>CINEMA VAULT</span></a>
+
   <div class="nav-right">
-    <div class="view-toggle">
-      <button class="view-btn active" id="btnNetflix" onclick="setView('netflix')">▤ Rows</button>
-      <button class="view-btn" id="btnGrid"    onclick="setView('grid')">⊞ Grid</button>
+    <div class="view-toggle" role="group" aria-label="Layout">
+      <button type="button" class="view-btn active" id="btnNetflix" data-view="netflix" aria-label="Rows view" title="Rows"><svg class="i"><use href="#i-rows"/></svg></button>
+      <button type="button" class="view-btn" id="btnGrid" data-view="grid" aria-label="Grid view" title="Grid"><svg class="i"><use href="#i-grid"/></svg></button>
     </div>
-    <button class="btn btn-red" onclick="openAddModal()">+ Add Movie</button>
-    <button class="btn btn-outline" onclick="openModal('clearAllModal')">Clear All</button>
-    <!-- UPDATED LOGOUT BUTTON — orange CTA matching Add Movie style -->
-    <button class="btn btn-orange" onclick="openModal('logoutModal')">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-      Logout
+    <button type="button" class="btn btn-gold" data-open-add><svg class="i"><use href="#i-plus"/></svg><span class="lbl">Add Movie</span></button>
+    <button type="button" class="btn btn-ghost-danger" data-open="clearAllModal" title="Clear all"><svg class="i"><use href="#i-trash"/></svg><span class="lbl">Clear All</span></button>
+    <span class="nav-sep" aria-hidden="true"></span>
+    <button type="button" class="user-chip" data-open="logoutModal" title="Sign out">
+      <span class="avatar"><?= $h($initial) ?></span>
+      <span class="user-name"><?= $h($username) ?></span>
+      <svg class="i"><use href="#i-logout"/></svg>
     </button>
   </div>
 </nav>
 
-<div class="hero">
-  <h1 class="hero-title">My Watchlist</h1>
-  <p class="hero-sub">Welcome back, <span><?= htmlspecialchars($username) ?></span>!</p>
-</div>
+<main class="dash-main">
 
-<div class="stats">
-  <div class="stat-card">
-    <div class="stat-label">Total Films</div>
-    <div class="stat-value"><?= $total ?></div>
-    <div class="stat-sub">In your vault</div>
+<!-- ══════════ HEADER + OVERVIEW ══════════ -->
+<header class="dash-hero">
+  <div class="dash-hero-text">
+    <p class="dash-kicker" id="greeting">Welcome back</p>
+    <h1 class="dash-title"><?= $h($username) ?>'s vault</h1>
+    <p class="dash-sub">
+      <?php if ($ov_total === 0): ?>
+        Nothing here yet. Add the first film you want to remember.
+      <?php else: ?>
+        <?= $ov_total ?> <?= $ov_total === 1 ? 'film' : 'films' ?> in your vault<?= $ov_watching ? ', ' . $ov_watching . ' in progress' : '' ?>.
+      <?php endif; ?>
+    </p>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Watched</div>
-    <div class="stat-value"><?= $watched ?></div>
-    <div class="stat-sub"><?= $total>0?round($watched/$total*100):0 ?>% completion</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Watching Now</div>
-    <div class="stat-value"><?= $watching ?></div>
-    <div class="stat-sub">In progress</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Avg Rating</div>
-    <div class="stat-value"><?= $avg_rating?:'—' ?></div>
-    <div class="stat-sub"><?= $cnt ?> rated films</div>
-  </div>
-</div>
+  <button type="button" class="btn btn-gold btn-lg hero-add" data-open-add><svg class="i"><use href="#i-plus"/></svg> Add a movie</button>
+</header>
 
-<form method="GET" class="filter-bar" id="filterForm">
-  <div class="search-wrap">
-    <input type="text" name="search" placeholder="Search titles..." value="<?= htmlspecialchars($_GET['search']??'') ?>" oninput="debounce()" autocomplete="off">
-  </div>
-  <select name="status" onchange="this.form.submit()">
-    <option value="">All Statuses</option>
-    <option value="Watching"      <?= ($_GET['status']??'')==='Watching'     ?'selected':'' ?>>Watching</option>
-    <option value="Watched"       <?= ($_GET['status']??'')==='Watched'      ?'selected':'' ?>>Watched</option>
-    <option value="Plan to Watch" <?= ($_GET['status']??'')==='Plan to Watch'?'selected':'' ?>>Plan to Watch</option>
-  </select>
-  <select name="genre" onchange="this.form.submit()">
-    <option value="">All Genres</option>
-    <?php foreach($genres as $g): ?>
-    <option value="<?= htmlspecialchars($g['genre']) ?>" <?= ($_GET['genre']??'')===$g['genre']?'selected':'' ?>><?= htmlspecialchars($g['genre']) ?></option>
-    <?php endforeach; ?>
-  </select>
-  <select name="sort" onchange="this.form.submit()">
-    <option value="newest" <?= ($_GET['sort']??'')==='newest'?'selected':'' ?>>Newest First</option>
-    <option value="oldest" <?= ($_GET['sort']??'')==='oldest'?'selected':'' ?>>Oldest First</option>
-    <option value="rating" <?= ($_GET['sort']??'')==='rating'?'selected':'' ?>>Top Rated</option>
-  </select>
-  <span style="font-size:.82rem;color:var(--muted);"><?= $total ?> films found</span>
-</form>
-
-<?php
-function renderCard($movie){
-  $bid='badge-'.strtolower(str_replace([' ','/'],'',$movie['status']));
-  if(strpos($bid,'plantowatch')!==false)$bid='badge-plan';
-  $mj  = htmlspecialchars(json_encode($movie),ENT_QUOTES);
-  $ts  = htmlspecialchars($movie['movie_title'],ENT_QUOTES);
-  $cov = htmlspecialchars($movie['cover_url']??'');
-  $rt  = (int)$movie['rating'];
-  ob_start(); ?>
-<div class="movie-card" onclick="openDetail(<?= $mj ?>)">
-  <?php if($cov): ?>
-    <img src="<?= $cov ?>" alt="" class="movie-poster" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-    <div class="movie-poster-placeholder" style="display:none"><div class="icon">🎬</div><div class="ptitle"><?= htmlspecialchars($movie['movie_title']) ?></div></div>
-  <?php else: ?>
-    <div class="movie-poster-placeholder"><div class="icon">🎬</div><div class="ptitle"><?= htmlspecialchars($movie['movie_title']) ?></div></div>
-  <?php endif; ?>
-  <span class="card-status-badge <?= $bid ?>"><?= htmlspecialchars($movie['status']) ?></span>
-  <?php if($rt): ?><span class="card-rating">★ <?= $rt ?></span><?php endif; ?>
-  <div class="card-overlay">
-    <div class="card-title"><?= htmlspecialchars($movie['movie_title']) ?></div>
-    <div class="card-genre"><?= htmlspecialchars($movie['genre']) ?></div>
-    <div class="card-actions">
-      <button class="card-btn card-btn-play" onclick="event.stopPropagation();openDetail(<?= $mj ?>)">▶ Info</button>
-      <button class="card-btn card-btn-edit" onclick="event.stopPropagation();openEditModal(<?= $mj ?>)">✎ Edit</button>
-      <button class="card-btn card-btn-del"  onclick="event.stopPropagation();confirmDel(<?= $movie['watchlist_id'] ?>,'<?= $ts ?>')">✕</button>
+<section class="overview" aria-label="Your stats">
+  <div class="stats">
+    <a class="stat-card" href="<?= $h(qs(['status'=>'','genre'=>'','search'=>''])) ?>">
+      <span class="stat-icon"><svg class="i"><use href="#i-film"/></svg></span>
+      <span class="stat-label">Total films</span>
+      <span class="stat-value" data-count="<?= $ov_total ?>"><?= $ov_total ?></span>
+      <span class="stat-sub">In your vault</span>
+    </a>
+    <a class="stat-card" href="<?= $h(qs(['status'=>'Watched'])) ?>">
+      <span class="stat-icon"><svg class="i"><use href="#i-check-circle"/></svg></span>
+      <span class="stat-label">Watched</span>
+      <span class="stat-value" data-count="<?= $ov_watched ?>"><?= $ov_watched ?></span>
+      <span class="stat-sub"><?= $ov_pct ?>% complete</span>
+      <span class="stat-bar" aria-hidden="true"><i style="--w:<?= $ov_pct ?>%"></i></span>
+    </a>
+    <a class="stat-card" href="<?= $h(qs(['status'=>'Watching'])) ?>">
+      <span class="stat-icon"><svg class="i"><use href="#i-clock"/></svg></span>
+      <span class="stat-label">Watching now</span>
+      <span class="stat-value" data-count="<?= $ov_watching ?>"><?= $ov_watching ?></span>
+      <span class="stat-sub">In progress</span>
+    </a>
+    <div class="stat-card stat-static">
+      <span class="stat-icon"><svg class="i"><use href="#i-star"/></svg></span>
+      <span class="stat-label">Avg rating</span>
+      <span class="stat-value"><?= $ov_avg ?: '—' ?></span>
+      <span class="stat-sub stat-stars" aria-label="<?= $ov_rated ?> rated films">
+        <?php for ($s = 1; $s <= 5; $s++): ?><svg class="i i-fill<?= $s <= round($ov_avg) ? ' on' : '' ?>"><use href="#i-star"/></svg><?php endfor; ?>
+        <em><?= $ov_rated ?> rated</em>
+      </span>
     </div>
   </div>
-</div>
-<?php return ob_get_clean(); }
-?>
 
-<!-- NETFLIX ROWS -->
+  <aside class="taste" aria-label="Top genres">
+    <h2 class="panel-title">Your taste</h2>
+    <?php if (!$top_genres): ?>
+      <p class="taste-empty">Add a few films and your favorite genres will show up here.</p>
+    <?php else: ?>
+      <ul class="taste-list">
+        <?php foreach ($top_genres as $g => $n): ?>
+        <li>
+          <a href="<?= $h(qs(['genre'=>$g])) ?>" class="taste-row<?= $f_genre === $g ? ' is-on' : '' ?>">
+            <span class="taste-name"><?= $h($g) ?></span>
+            <span class="taste-bar"><i style="--w:<?= round($n / $top_max * 100) ?>%"></i></span>
+            <span class="taste-n"><?= $n ?></span>
+          </a>
+        </li>
+        <?php endforeach; ?>
+      </ul>
+    <?php endif; ?>
+  </aside>
+</section>
+
+<div class="sprockets" aria-hidden="true"></div>
+
+<!-- ══════════ FILTERS ══════════ -->
+<form method="GET" class="filter-bar" id="filterForm" role="search">
+  <div class="search-wrap input-wrap">
+    <svg class="i i-lead"><use href="#i-search"/></svg>
+    <input class="input has-lead has-trail" type="search" id="searchInput" name="search" placeholder="Search your vault" value="<?= $h($f_search) ?>" autocomplete="off" aria-label="Search titles">
+    <button type="button" class="input-trail search-clear" id="searchClear" aria-label="Clear search" <?= $f_search === '' ? 'hidden' : '' ?>><svg class="i"><use href="#i-x"/></svg></button>
+  </div>
+
+  <div class="chips" role="group" aria-label="Status">
+    <a class="chip<?= $f_status === '' ? ' is-on' : '' ?>" href="<?= $h(qs(['status'=>''])) ?>">All <b><?= $ov_total ?></b></a>
+    <a class="chip<?= $f_status === 'Watching' ? ' is-on' : '' ?>" href="<?= $h(qs(['status'=>'Watching'])) ?>">Watching <b><?= $ov_watching ?></b></a>
+    <a class="chip<?= $f_status === 'Watched' ? ' is-on' : '' ?>" href="<?= $h(qs(['status'=>'Watched'])) ?>">Watched <b><?= $ov_watched ?></b></a>
+    <a class="chip<?= $f_status === 'Plan to Watch' ? ' is-on' : '' ?>" href="<?= $h(qs(['status'=>'Plan to Watch'])) ?>">Plan to watch <b><?= $ov_plan ?></b></a>
+  </div>
+
+  <?php if ($f_status !== ''): ?><input type="hidden" name="status" value="<?= $h($f_status) ?>"><?php endif; ?>
+  <div class="filter-selects">
+    <select class="select" name="genre" onchange="this.form.submit()" aria-label="Genre">
+      <option value="">All genres</option>
+      <?php foreach ($genres as $g): ?>
+      <option value="<?= $h($g['genre']) ?>" <?= $f_genre === $g['genre'] ? 'selected' : '' ?>><?= $h($g['genre']) ?></option>
+      <?php endforeach; ?>
+    </select>
+    <select class="select" name="sort" onchange="this.form.submit()" aria-label="Sort order">
+      <option value="newest" <?= $sort === 'newest' ? 'selected' : '' ?>>Newest first</option>
+      <option value="oldest" <?= $sort === 'oldest' ? 'selected' : '' ?>>Oldest first</option>
+      <option value="rating" <?= $sort === 'rating' ? 'selected' : '' ?>>Top rated</option>
+    </select>
+  </div>
+  <p class="found" id="foundCount" aria-live="polite"><b id="foundNum"><?= $total ?></b> <span id="foundWord"><?= $total === 1 ? 'film' : 'films' ?></span> found</p>
+</form>
+
+<!-- ══════════ ROWS VIEW ══════════ -->
 <div id="netflix-view">
-<?php if(empty($movies)): ?>
-  <div class="empty-state"><div class="big-icon">🎬</div><h3>Your vault is empty</h3><p>Click "+ Add Movie" to get started.</p></div>
+<?php if (empty($movies)): ?>
+  <div class="empty-state">
+    <svg class="i empty-icon"><use href="#i-film"/></svg>
+    <?php if ($ov_total === 0): ?>
+      <h3>Your vault is empty</h3>
+      <p>Add the first movie you want to remember.</p>
+      <button type="button" class="btn btn-gold btn-lg" data-open-add><svg class="i"><use href="#i-plus"/></svg> Add your first movie</button>
+    <?php else: ?>
+      <h3>No films match these filters</h3>
+      <p>Try a different search, or clear the filters.</p>
+      <a class="btn btn-ghost btn-lg" href="index.php">Clear filters</a>
+    <?php endif; ?>
+  </div>
 <?php else: ?>
-  <?php $rl=['Watching'=>'🔴 Currently Watching','Watched'=>'✅ Watched','Plan to Watch'=>'📌 Plan to Watch'];
-  foreach($rl as $sk=>$label):
-    if(empty($by_status[$sk]))continue;
-    $rid='row-'.md5($sk); ?>
-  <div class="section">
+  <?php foreach ($row_defs as $sk => [$label, $icon]):
+    if (empty($by_status[$sk])) continue;
+    $rid = 'row-' . md5($sk); ?>
+  <section class="section" data-section>
     <div class="section-header">
-      <h2 class="section-title"><?= $label ?></h2>
+      <span class="section-icon section-icon-<?= statusClass($sk) ?>"><svg class="i"><use href="#i-<?= $icon ?>"/></svg></span>
+      <h2 class="section-title"><?= $h($label) ?></h2>
       <span class="section-count"><?= count($by_status[$sk]) ?></span>
     </div>
     <div class="row-wrap">
-      <button class="row-btn row-btn-left"  onclick="scrollRow('<?= $rid ?>',-1)">&#8249;</button>
+      <button type="button" class="row-btn row-btn-left" data-scroll="<?= $rid ?>" data-dir="-1" aria-label="Scroll left"><svg class="i"><use href="#i-chev-left"/></svg></button>
       <div class="row" id="<?= $rid ?>">
-        <?php foreach($by_status[$sk] as $m) echo renderCard($m); ?>
+        <?php foreach ($by_status[$sk] as $m) echo renderCard($m, $h); ?>
       </div>
-      <button class="row-btn row-btn-right" onclick="scrollRow('<?= $rid ?>',1)">&#8250;</button>
+      <button type="button" class="row-btn row-btn-right" data-scroll="<?= $rid ?>" data-dir="1" aria-label="Scroll right"><svg class="i"><use href="#i-chev-right"/></svg></button>
     </div>
-  </div>
+  </section>
   <?php endforeach; ?>
 <?php endif; ?>
 </div>
 
-<!-- GRID VIEW -->
-<div id="grid-view" style="display:none">
-<?php if(empty($movies)): ?>
-  <div class="empty-state"><div class="big-icon">🎬</div><h3>Your vault is empty</h3></div>
-<?php else: ?>
-  <div class="grid-section"><div class="movie-grid"><?php foreach($movies as $m) echo renderCard($m); ?></div></div>
+<!-- ══════════ GRID VIEW ══════════ -->
+<div id="grid-view" hidden>
+<?php if (!empty($movies)): ?>
+  <div class="grid-section"><div class="movie-grid"><?php foreach ($movies as $m) echo renderCard($m, $h); ?></div></div>
 <?php endif; ?>
 </div>
 
+<div class="empty-state search-empty" id="searchEmpty" hidden>
+  <svg class="i empty-icon"><use href="#i-search"/></svg>
+  <h3>No titles match your search</h3>
+  <p>Check the spelling, or clear the search box.</p>
+</div>
+
+</main>
+
+<button type="button" class="fab" data-open-add aria-label="Add movie"><svg class="i"><use href="#i-plus"/></svg></button>
+
 <!-- ════════ MODALS ════════ -->
 
-<!-- ADD MODAL -->
-<div class="modal-backdrop" id="addModal">
+<!-- ADD -->
+<div class="modal-backdrop" id="addModal" role="dialog" aria-modal="true" aria-labelledby="addTitle">
   <div class="modal">
     <div class="modal-header">
-      <h2 class="modal-title">Add to Vault</h2>
-      <button class="modal-close" onclick="closeModal('addModal')">✕</button>
+      <h2 class="modal-title" id="addTitle">Add to vault</h2>
+      <button type="button" class="modal-close" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
     </div>
     <div class="modal-body">
-      <form method="POST" enctype="multipart/form-data">
+      <form method="POST" enctype="multipart/form-data" id="addForm">
         <input type="hidden" name="add_movie" value="1">
         <div class="form-grid">
-          <div class="form-group form-full">
-            <label>Movie / Show Title</label>
-            <input type="text" name="movie_title" placeholder="e.g. One Piece" required>
+          <div class="field form-full">
+            <label for="addMovieTitle">Movie or show title</label>
+            <input class="input" type="text" id="addMovieTitle" name="movie_title" placeholder="e.g. One Piece" required>
           </div>
-          <div class="form-group">
-            <label>Genre</label>
-            <select name="genre" required>
-              <option value="">Select...</option>
-              <option>Action</option><option>Adventure</option><option>Animation</option><option>Anime</option>
-              <option>Comedy</option><option>Crime</option><option>Documentary</option><option>Drama</option>
-              <option>Fantasy</option><option>Fiction</option><option>Horror</option>
-              <option>Romance</option><option>Sci-Fi</option><option>Thriller</option>
+          <div class="field">
+            <label for="addGenre">Genre</label>
+            <select id="addGenre" name="genre" required>
+              <option value="">Select a genre</option>
+              <?php foreach ($genre_options as $g): ?><option><?= $h($g) ?></option><?php endforeach; ?>
             </select>
           </div>
-          <div class="form-group">
-            <label>Status</label>
-            <select name="status" required>
+          <div class="field">
+            <label for="addStatus">Status</label>
+            <select id="addStatus" name="status" required>
               <option value="Plan to Watch">Plan to Watch</option>
               <option value="Watching">Watching</option>
               <option value="Watched">Watched</option>
             </select>
           </div>
-          <div class="form-group form-full">
-            <label>Your Rating</label>
-            <div class="star-picker" id="addStarPicker">
-              <span class="star" onclick="setStars('add',1)">★</span>
-              <span class="star" onclick="setStars('add',2)">★</span>
-              <span class="star" onclick="setStars('add',3)">★</span>
-              <span class="star" onclick="setStars('add',4)">★</span>
-              <span class="star" onclick="setStars('add',5)">★</span>
+          <div class="field form-full">
+            <span class="field-label">Your rating</span>
+            <div class="star-picker" id="addStarPicker" role="radiogroup" aria-label="Rating">
+              <?php for ($s = 1; $s <= 5; $s++): ?><button type="button" class="star" data-v="<?= $s ?>" aria-label="<?= $s ?> star<?= $s>1?'s':'' ?>"><svg class="i"><use href="#i-star"/></svg></button><?php endfor; ?>
+              <button type="button" class="star-clear" data-v="0">Clear</button>
             </div>
             <input type="hidden" name="rating" id="addRating" value="0">
           </div>
-
-          <!-- ★ FILE UPLOAD ZONE ★ -->
-          <div class="form-group form-full">
-            <label>Cover Image — upload from your device</label>
-            <div class="upload-zone" id="addZone"
-                 ondragover="onDragOver(event,'addZone')"
-                 ondragleave="onDragLeave('addZone')"
-                 ondrop="onDrop(event,'addZone','addFile')">
-              <input type="file" id="addFile" name="cover_file" accept="image/*"
-                     onchange="onFileChosen(this,'addZone')">
-              <div class="uz-icon" id="addZone_icon">📁</div>
-              <div class="uz-label" id="addZone_label"><span>Click to choose a file</span> or drag &amp; drop here</div>
-              <div class="uz-hint" id="addZone_hint">JPG · PNG · WEBP · GIF &nbsp;|&nbsp; Max 5 MB</div>
+          <div class="field form-full">
+            <span class="field-label">Cover image</span>
+            <div class="upload-zone" id="addZone">
+              <input type="file" id="addFile" name="cover_file" accept="image/*" aria-label="Choose a cover image">
+              <svg class="i uz-icon"><use href="#i-image"/></svg>
+              <div class="uz-label"><span>Choose a file</span> or drag it here</div>
+              <div class="uz-hint">JPG, PNG, WEBP or GIF, up to 5 MB</div>
             </div>
           </div>
-
-          <div class="form-group form-full">
-            <label>Description</label>
-            <textarea name="description" placeholder="Short synopsis or personal notes..."></textarea>
+          <div class="field form-full">
+            <label for="addDesc">Description</label>
+            <textarea id="addDesc" name="description" placeholder="A short synopsis or your own notes"></textarea>
           </div>
         </div>
-        <button type="submit" class="btn btn-red" style="width:100%;margin-top:16px;justify-content:center;padding:12px;">+ Add to Vault</button>
+        <button type="submit" class="btn btn-gold btn-lg btn-block modal-submit"><svg class="i"><use href="#i-plus"/></svg> Add to vault</button>
       </form>
     </div>
   </div>
 </div>
 
-<!-- EDIT MODAL -->
-<div class="modal-backdrop" id="editModal">
+<!-- EDIT -->
+<div class="modal-backdrop" id="editModal" role="dialog" aria-modal="true" aria-labelledby="editTitleH">
   <div class="modal">
     <div class="modal-header">
-      <h2 class="modal-title">Edit Movie</h2>
-      <button class="modal-close" onclick="closeModal('editModal')">✕</button>
+      <h2 class="modal-title" id="editTitleH">Edit movie</h2>
+      <button type="button" class="modal-close" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
     </div>
     <div class="modal-body">
       <form method="POST" enctype="multipart/form-data">
         <input type="hidden" name="edit_movie" value="1">
         <input type="hidden" name="id" id="editId">
         <div class="form-grid">
-          <div class="form-group form-full">
-            <label>Movie / Show Title</label>
-            <input type="text" name="movie_title" id="editTitle" required>
+          <div class="field form-full">
+            <label for="editTitle">Movie or show title</label>
+            <input class="input" type="text" name="movie_title" id="editTitle" required>
           </div>
-          <div class="form-group">
-            <label>Genre</label>
+          <div class="field">
+            <label for="editGenre">Genre</label>
             <select name="genre" id="editGenre">
-              <option>Action</option><option>Adventure</option><option>Animation</option><option>Anime</option>
-              <option>Comedy</option><option>Crime</option><option>Documentary</option><option>Drama</option>
-              <option>Fantasy</option><option>Fiction</option><option>Horror</option>
-              <option>Romance</option><option>Sci-Fi</option><option>Thriller</option>
+              <?php foreach ($genre_options as $g): ?><option><?= $h($g) ?></option><?php endforeach; ?>
             </select>
           </div>
-          <div class="form-group">
-            <label>Status</label>
+          <div class="field">
+            <label for="editStatus">Status</label>
             <select name="status" id="editStatus">
               <option value="Plan to Watch">Plan to Watch</option>
               <option value="Watching">Watching</option>
               <option value="Watched">Watched</option>
             </select>
           </div>
-          <div class="form-group form-full">
-            <label>Your Rating</label>
-            <div class="star-picker" id="editStarPicker">
-              <span class="star" onclick="setStars('edit',1)">★</span>
-              <span class="star" onclick="setStars('edit',2)">★</span>
-              <span class="star" onclick="setStars('edit',3)">★</span>
-              <span class="star" onclick="setStars('edit',4)">★</span>
-              <span class="star" onclick="setStars('edit',5)">★</span>
+          <div class="field form-full">
+            <span class="field-label">Your rating</span>
+            <div class="star-picker" id="editStarPicker" role="radiogroup" aria-label="Rating">
+              <?php for ($s = 1; $s <= 5; $s++): ?><button type="button" class="star" data-v="<?= $s ?>" aria-label="<?= $s ?> star<?= $s>1?'s':'' ?>"><svg class="i"><use href="#i-star"/></svg></button><?php endfor; ?>
+              <button type="button" class="star-clear" data-v="0">Clear</button>
             </div>
             <input type="hidden" name="rating" id="editRating" value="0">
           </div>
-
-          <!-- ★ FILE UPLOAD ZONE ★ -->
-          <div class="form-group form-full">
-            <label>Cover Image <em style="text-transform:none;color:#555;font-style:normal;">— leave empty to keep current</em></label>
-            <div class="upload-zone" id="editZone"
-                 ondragover="onDragOver(event,'editZone')"
-                 ondragleave="onDragLeave('editZone')"
-                 ondrop="onDrop(event,'editZone','editFile')">
-              <input type="file" id="editFile" name="cover_file" accept="image/*"
-                     onchange="onFileChosen(this,'editZone')">
-              <div class="uz-icon" id="editZone_icon">📁</div>
-              <div class="uz-label" id="editZone_label"><span>Click to choose a file</span> or drag &amp; drop here</div>
-              <div class="uz-hint" id="editZone_hint">Upload a new image to replace the current cover</div>
+          <div class="field form-full">
+            <span class="field-label">Cover image <small>Leave empty to keep the current one</small></span>
+            <div class="upload-zone" id="editZone">
+              <input type="file" id="editFile" name="cover_file" accept="image/*" aria-label="Choose a new cover image">
+              <svg class="i uz-icon"><use href="#i-image"/></svg>
+              <div class="uz-label"><span>Choose a file</span> or drag it here</div>
+              <div class="uz-hint">Upload a new image to replace the current cover</div>
             </div>
           </div>
-
-          <div class="form-group form-full">
-            <label>Description</label>
-            <textarea name="description" id="editDesc" placeholder="Short synopsis or personal notes..."></textarea>
+          <div class="field form-full">
+            <label for="editDesc">Description</label>
+            <textarea name="description" id="editDesc" placeholder="A short synopsis or your own notes"></textarea>
           </div>
         </div>
-        <button type="submit" class="btn btn-red" style="width:100%;margin-top:16px;justify-content:center;padding:12px;">Save Changes</button>
+        <button type="submit" class="btn btn-gold btn-lg btn-block modal-submit"><svg class="i"><use href="#i-check"/></svg> Save changes</button>
       </form>
     </div>
   </div>
 </div>
 
-<!-- DETAIL MODAL -->
-<div class="modal-backdrop" id="detailModal">
-  <div class="detail-modal">
-    <button class="modal-close" onclick="closeModal('detailModal')" style="position:absolute;top:12px;right:14px;z-index:10;background:rgba(0,0,0,.6);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);">✕</button>
-    <div class="detail-hero" id="detailHero">
-      <div class="detail-hero-bg">🎬</div>
-      <div class="detail-hero-overlay"></div>
-      <div class="detail-hero-content">
-        <h2 class="detail-title" id="dTitle">—</h2>
-        <div class="detail-meta" id="dMeta"></div>
-      </div>
-    </div>
+<!-- DETAIL -->
+<div class="modal-backdrop" id="detailModal" role="dialog" aria-modal="true" aria-labelledby="dTitle">
+  <div class="modal detail-modal">
+    <button type="button" class="modal-close detail-close" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
+    <div class="detail-hero" id="detailHero"></div>
     <div class="detail-body">
-      <div class="detail-stars" id="dStars"></div>
-      <p class="detail-desc"  id="dDesc">No description available.</p>
-      <div class="detail-actions" id="dActions"></div>
+      <h2 class="detail-title" id="dTitle">—</h2>
+      <div class="detail-meta" id="dMeta"></div>
+      <div class="detail-stars" id="dStars" role="img"></div>
+      <p class="detail-desc" id="dDesc">No description yet.</p>
+      <div class="detail-actions">
+        <button type="button" class="btn btn-gold" id="dEdit"><svg class="i"><use href="#i-edit"/></svg> Edit</button>
+        <button type="button" class="btn btn-danger" id="dDel"><svg class="i"><use href="#i-trash"/></svg> Remove</button>
+      </div>
     </div>
   </div>
 </div>
 
 <!-- DELETE CONFIRM -->
-<div class="modal-backdrop" id="deleteModal">
-  <div class="modal" style="width:min(400px,90vw)">
-    <div class="confirm-modal">
-      <div class="icon">🗑</div>
-      <h3>Remove this film?</h3>
-      <p id="delMsg">This will permanently remove the film from your vault.</p>
+<div class="modal-backdrop" id="deleteModal" role="alertdialog" aria-modal="true" aria-labelledby="delH">
+  <div class="modal modal-sm">
+    <div class="confirm">
+      <div class="confirm-icon danger"><svg class="i"><use href="#i-trash"/></svg></div>
+      <h3 id="delH">Remove this film?</h3>
+      <p id="delMsg">This removes the film from your vault for good.</p>
       <div class="confirm-actions">
-        <button class="btn btn-outline" onclick="closeModal('deleteModal')">Cancel</button>
-        <a class="btn btn-red" id="delLink">Remove</a>
+        <button type="button" class="btn btn-soft" data-close>Keep it</button>
+        <a class="btn btn-danger-solid" id="delLink" href="#"><svg class="i"><use href="#i-trash"/></svg> Remove</a>
       </div>
     </div>
   </div>
 </div>
 
 <!-- CLEAR ALL CONFIRM -->
-<div class="modal-backdrop" id="clearAllModal">
-  <div class="modal" style="width:min(400px,90vw)">
-    <div class="confirm-modal">
-      <form method="POST">
-        <input type="hidden" name="delete_all" value="1">
-        <div class="icon">⚠️</div>
-        <h3>Clear entire vault?</h3>
-        <p>Permanently deletes ALL movies and their cover images. Cannot be undone.</p>
-        <div class="confirm-actions">
-          <button type="button" class="btn btn-outline" onclick="closeModal('clearAllModal')">Cancel</button>
-          <button type="submit" class="btn btn-red">Clear All</button>
-        </div>
-      </form>
-    </div>
-  </div>
-</div>
-
-<!-- ════ LOGOUT CONFIRM MODAL (NEW) ════ -->
-<div class="modal-backdrop" id="logoutModal">
-  <div class="modal" style="width:min(420px,90vw)">
-    <div class="logout-confirm-modal">
-      <div class="logout-icon-wrap">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ff6b35" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-          <polyline points="16 17 21 12 16 7"/>
-          <line x1="21" y1="12" x2="9" y2="12"/>
-        </svg>
-      </div>
-      <h3>Leaving So Soon?</h3>
-      <div class="user-badge">
-        <span>👤</span>
-        <span>Signed in as <strong><?= htmlspecialchars($username) ?></strong></span>
-      </div>
-      <p>Do you want to logout from Cinema Vault? Your watchlist will be saved and ready when you return.</p>
+<div class="modal-backdrop" id="clearAllModal" role="alertdialog" aria-modal="true" aria-labelledby="clearH">
+  <div class="modal modal-sm">
+    <form method="POST" class="confirm">
+      <input type="hidden" name="delete_all" value="1">
+      <div class="confirm-icon danger"><svg class="i"><use href="#i-alert"/></svg></div>
+      <h3 id="clearH">Clear your entire vault?</h3>
+      <p>This permanently deletes all your movies and their cover images. You can't undo it.</p>
       <div class="confirm-actions">
-        <button class="btn btn-outline" onclick="closeModal('logoutModal')" style="flex:1;justify-content:center;padding:11px 20px;">
-          Stay &amp; Watch
-        </button>
-        <a href="logout.php" class="btn btn-orange" style="flex:1;justify-content:center;padding:11px 20px;">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-          Yes, Logout
-        </a>
+        <button type="button" class="btn btn-soft" data-close>Cancel</button>
+        <button type="submit" class="btn btn-danger-solid"><svg class="i"><use href="#i-trash"/></svg> Clear all</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- LOGOUT CONFIRM -->
+<div class="modal-backdrop" id="logoutModal" role="alertdialog" aria-modal="true" aria-labelledby="logoutH">
+  <div class="modal modal-sm">
+    <div class="confirm">
+      <div class="confirm-icon"><svg class="i"><use href="#i-logout"/></svg></div>
+      <h3 id="logoutH">Leaving so soon?</h3>
+      <div class="user-badge"><span class="avatar"><?= $h($initial) ?></span><span>Signed in as <strong><?= $h($username) ?></strong></span></div>
+      <p>Your watchlist is saved and will be here when you come back.</p>
+      <div class="confirm-actions">
+        <button type="button" class="btn btn-soft" data-close>Stay and watch</button>
+        <a href="logout.php" class="btn btn-gold"><svg class="i"><use href="#i-logout"/></svg> Log out</a>
       </div>
     </div>
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
-/* VIEW */
-function setView(v){
-  document.getElementById('netflix-view').style.display=v==='netflix'?'block':'none';
-  document.getElementById('grid-view').style.display   =v==='grid'?'block':'none';
-  document.getElementById('btnNetflix').classList.toggle('active',v==='netflix');
-  document.getElementById('btnGrid').classList.toggle('active',v==='grid');
-  localStorage.setItem('cv_view',v);
-}
-(()=>{const s=localStorage.getItem('cv_view');if(s)setView(s);})();
-
-window.addEventListener('scroll',()=>document.getElementById('navbar').classList.toggle('scrolled',scrollY>10));
-function scrollRow(id,d){document.getElementById(id).scrollBy({left:d*600,behavior:'smooth'});}
-
-/* MODALS */
-function openModal(id){document.getElementById(id).classList.add('open');document.body.style.overflow='hidden';}
-function closeModal(id){document.getElementById(id).classList.remove('open');document.body.style.overflow='';}
-document.querySelectorAll('.modal-backdrop').forEach(el=>el.addEventListener('click',e=>{if(e.target===el)closeModal(el.id);}));
-document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-backdrop.open').forEach(m=>closeModal(m.id));});
-
-function openAddModal(){
-  resetZone('addZone','addFile');
-  setStars('add',0);
-  openModal('addModal');
-}
-
-function openEditModal(m){
-  document.getElementById('editId').value    = m.watchlist_id;
-  document.getElementById('editTitle').value = m.movie_title;
-  document.getElementById('editDesc').value  = m.description||'';
-  document.getElementById('editGenre').value = m.genre;
-  document.getElementById('editStatus').value= m.status;
-  setStars('edit',parseInt(m.rating)||0);
-  resetZone('editZone','editFile');
-  if(m.cover_url){ showZonePreview('editZone','editFile',m.cover_url,false); }
-  openModal('editModal');
-}
-
-function openDetail(m){
-  const hero=document.getElementById('detailHero');
-  hero.innerHTML='';
-  if(m.cover_url){
-    const img=document.createElement('img');img.src=m.cover_url;img.alt=m.movie_title;
-    img.onerror=()=>{img.style.display='none';addBg();};hero.appendChild(img);
-  }else{addBg();}
-  function addBg(){const b=document.createElement('div');b.className='detail-hero-bg';b.textContent='🎬';hero.appendChild(b);}
-  const ov=document.createElement('div');ov.className='detail-hero-overlay';hero.appendChild(ov);
-  const ct=document.createElement('div');ct.className='detail-hero-content';hero.appendChild(ct);
-  ct.innerHTML=`<h2 class="detail-title">${esc(m.movie_title)}</h2><div id="_dm" class="detail-meta"></div>`;
-  [m.genre,m.status,m.date_added?new Date(m.date_added).getFullYear():''].filter(Boolean)
-    .forEach(t=>{const s=document.createElement('span');s.className='detail-tag';s.textContent=t;ct.querySelector('#_dm').appendChild(s);});
-  let st='';for(let i=1;i<=5;i++)st+=`<span class="star ${i<=(parseInt(m.rating)||0)?'filled':''}">★</span>`;
-  document.getElementById('dStars').innerHTML=st;
-  document.getElementById('dDesc').textContent=m.description||'No description available.';
-  const mj=escA(JSON.stringify(m));
-  document.getElementById('dActions').innerHTML=`
-    <button class="btn btn-red" onclick="closeModal('detailModal');openEditModal(${mj})">✎ Edit</button>
-    <button class="btn btn-outline" onclick="closeModal('detailModal');confirmDel(${m.watchlist_id},'${escA(m.movie_title)}')">🗑 Remove</button>`;
-  openModal('detailModal');
-}
-
-function esc(s){const d=document.createElement('div');d.appendChild(document.createTextNode(s||''));return d.innerHTML;}
-function escA(s){return(s||'').replace(/\\/g,'\\\\').replace(/"/g,'&quot;').replace(/'/g,"&#39;");}
-
-/* STARS */
-function setStars(px,val){
-  document.getElementById(px+'Rating').value=val;
-  document.querySelectorAll('#'+px+'StarPicker .star').forEach((s,i)=>{
-    s.style.color=i<val?'var(--gold)':'var(--border)';s.classList.toggle('active',i<val);
-  });
-}
-
-/* ── UPLOAD ZONE LOGIC ── */
-function resetZone(zoneId, fileId){
-  const z=document.getElementById(zoneId);
-  const pv=z.querySelector('.uz-preview'); if(pv)pv.remove();
-  const rb=z.querySelector('.uz-remove');  if(rb)rb.remove();
-  z.querySelector('.uz-icon') .style.display='';
-  z.querySelector('.uz-label').style.display='';
-  z.querySelector('.uz-hint') .style.display='';
-  const f=document.getElementById(fileId); if(f) f.value='';
-}
-
-function showZonePreview(zoneId, fileId, src, allowRemove=true){
-  const z=document.getElementById(zoneId);
-  z.querySelector('.uz-icon') .style.display='none';
-  z.querySelector('.uz-label').style.display='none';
-  z.querySelector('.uz-hint') .style.display='none';
-  let pv=z.querySelector('.uz-preview');
-  if(!pv){pv=document.createElement('div');pv.className='uz-preview';z.appendChild(pv);}
-  pv.innerHTML=`<img src="${src}" alt="cover" onerror="this.src=''">
-    <div class="uz-change">📁 Click to choose a different image</div>`;
-  if(allowRemove){
-    let rb=z.querySelector('.uz-remove');
-    if(!rb){rb=document.createElement('button');rb.type='button';rb.className='uz-remove';z.appendChild(rb);}
-    rb.textContent='✕';
-    rb.onclick=e=>{e.stopPropagation();resetZone(zoneId,fileId);};
-  }
-}
-
-function onFileChosen(input, zoneId){
-  const file=input.files&&input.files[0];
-  if(!file)return;
-  if(!file.type.startsWith('image/')){alert('Please choose an image file (JPG, PNG, WEBP, GIF).');input.value='';return;}
-  if(file.size>5*1024*1024){alert('Image must be under 5 MB.');input.value='';return;}
-  const reader=new FileReader();
-  reader.onload=e=>showZonePreview(zoneId,input.id,e.target.result,true);
-  reader.readAsDataURL(file);
-}
-
-function onDragOver(e,zoneId){e.preventDefault();document.getElementById(zoneId).classList.add('drag-over');}
-function onDragLeave(zoneId){document.getElementById(zoneId).classList.remove('drag-over');}
-function onDrop(e,zoneId,fileId){
-  e.preventDefault();
-  document.getElementById(zoneId).classList.remove('drag-over');
-  const file=e.dataTransfer.files[0];if(!file)return;
-  const inp=document.getElementById(fileId);
-  const dt=new DataTransfer();dt.items.add(file);inp.files=dt.files;
-  onFileChosen(inp,zoneId);
-}
-
-/* DELETE */
-function confirmDel(id,title){
-  document.getElementById('delMsg').textContent=`Remove "${title}" from your vault?`;
-  document.getElementById('delLink').href=`?delete_id=${id}`;
-  openModal('deleteModal');
-}
-
-/* SEARCH */
-let _dt;function debounce(){clearTimeout(_dt);_dt=setTimeout(()=>document.getElementById('filterForm').submit(),400);}
-
-/* TOAST */
-function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
-<?php if(isset($_GET['added'])): ?>toast('🎬 Movie added to your vault!');<?php endif; ?>
-<?php if(isset($_GET['edited'])): ?>toast('✅ Movie updated successfully!');<?php endif; ?>
-<?php if(isset($_GET['duplicate'])): ?>toast('⚠️ "<?= htmlspecialchars(addslashes($_GET['title'] ?? '')) ?>" is already in your vault!');<?php endif; ?>
-
-/* DUPLICATE GUARD — client-side pre-check */
-const _existingTitles = <?= json_encode(array_map(fn($m) => mb_strtolower(trim($m['movie_title'])), $movies)) ?>;
-
-document.querySelector('#addModal form').addEventListener('submit', function(e) {
-  const input = this.querySelector('[name="movie_title"]').value.trim().toLowerCase();
-  if (_existingTitles.includes(input)) {
-    e.preventDefault();
-    toast('⚠️ "' + this.querySelector('[name="movie_title"]').value.trim() + '" is already in your vault!');
-    // Shake the input for visual feedback
-    const inp = this.querySelector('[name="movie_title"]');
-    inp.style.transition = 'border-color .1s';
-    inp.style.borderColor = 'var(--red)';
-    inp.style.boxShadow = '0 0 0 2px rgba(229,9,20,.3)';
-    setTimeout(() => { inp.style.borderColor = ''; inp.style.boxShadow = ''; }, 2000);
-  }
-});
+window.CV = <?= json_encode([
+  'username' => $username,
+  'existing' => array_map(fn($r) => mb_strtolower(trim($r['movie_title'])), $allrows),
+  'flash'    => [
+      'added'     => isset($_GET['added']),
+      'edited'    => isset($_GET['edited']),
+      'duplicate' => isset($_GET['duplicate']) ? (string)($_GET['title'] ?? '') : null,
+  ],
+], $json_flags) ?>;
 </script>
+<script src="assets/js/dashboard.js"></script>
 </body>
 </html>
