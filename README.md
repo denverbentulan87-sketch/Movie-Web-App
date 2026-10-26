@@ -27,11 +27,4 @@ Surprise Me and rule-based "Picked for you".
 | `includes/statistics.php`, `includes/recommend.php` | Pure functions for stats / Wrapped / recommendations. |
 | `migrations/`, `migrate.php` | Schema changes. |
 | `assets/js/core.js` · `dashboard.js` · `vault.js` | Shared core · vault page · shared page behaviours. |
-| `tests/` | Dev-only test harness (see below). |
 | `delete.php`, `delete_all.php`, `create.php`, `edit.php` | Retired (insecure/broken); they just redirect. |
-
-## Tests (no MySQL needed)
-`tests/serve.sh &` starts the app on a SQLite-backed `mysqli` stand-in, then:
-`python3 tests/test_backend.py`, `python3 tests/test_pages.py`, `php -n -d extension=mbstring tests/test_units.php`,
-`python3 tests/browser_smoke.py` (needs Playwright). The shim does not validate MySQL-specific syntax — run the
-migration and a manual pass on your real MariaDB/MySQL too.
