@@ -1,8 +1,13 @@
 <?php
 /**
- * RETIRED. This standalone form was no longer linked anywhere, used status
- * values that don't exist in the database, read an unchecked $_GET['id'] and
- * printed raw PHP errors. Editing is done from the dashboard (index.php).
+ * Edit one of the signed-in user's movies (movie_id). A movie that is missing or belongs
+ * to somebody else gets the same 404. POST only, with a CSRF token.
+ * Browser form → flash + redirect to the dashboard; JavaScript (fetch) → JSON.
  */
-header('Location: index.php');
-exit;
+require __DIR__ . '/includes/action_runner.php';
+
+cv_run_action('edit.php', function (int $uid): array {
+    $mid = (int)($_POST['movie_id'] ?? 0);
+    cv_edit_movie($uid, $mid, $_POST);
+    return ['message' => 'Changes saved.', 'movie_id' => $mid, 'reload' => true];
+});

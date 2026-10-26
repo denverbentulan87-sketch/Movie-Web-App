@@ -1,9 +1,11 @@
 <?php
 /**
- * RETIRED. This endpoint used to run `DELETE FROM movie_watchlist` with no login
- * check and no user filter, so anybody could wipe every user's vault with a
- * single request. Clearing a vault now lives in actions.php (POST + CSRF +
- * restricted to the signed-in user's own rows).
+ * Clear the signed-in user's whole vault. Only that user's movies are removed; tags and
+ * collections themselves are kept. POST only, with a CSRF token.
  */
-header('Location: index.php');
-exit;
+require __DIR__ . '/includes/action_runner.php';
+
+cv_run_action('delete_all.php', function (int $uid): array {
+    $n = cv_delete_all_movies($uid);
+    return ['message' => $n ? 'Your vault has been cleared.' : 'Your vault was already empty.', 'reload' => true];
+});

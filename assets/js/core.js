@@ -66,14 +66,15 @@
     }
   });
 
-  /* ── POST to actions.php (CSRF token attached) → parsed JSON; throws Error(message) on failure ── */
+  /* ── POST to the endpoint that owns the action (CSRF token attached) → parsed JSON; throws Error(message) on failure ── */
+  const ENDPOINT = { movie_add: 'create.php', movie_edit: 'edit.php', movie_delete: 'delete.php', movies_delete_all: 'delete_all.php' };
   async function post(action, fields = {}) {
     const fd = new FormData();
     fd.append('action', action); fd.append('csrf_token', csrf());
     Object.entries(fields).forEach(([k, v]) => { if (v !== undefined && v !== null) fd.append(k, v); });
     let res, data;
     try {
-      res = await fetch('actions.php', { method: 'POST', body: fd, credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      res = await fetch(ENDPOINT[action] || 'actions.php', { method: 'POST', body: fd, credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
       data = await res.json();
     } catch (e) { throw new Error('Could not reach the server. Check your connection and try again.'); }
     if (res.status === 401) { location.href = 'homepage.php?modal=login'; throw new Error('Please sign in again.'); }

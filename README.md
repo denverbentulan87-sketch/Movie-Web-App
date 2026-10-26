@@ -19,7 +19,9 @@ Surprise Me and rule-based "Picked for you".
 |---|---|
 | `homepage.php`, `login.php`, `register.php`, `logout.php` | Landing page and auth (CSRF-protected; logout is POST). |
 | `index.php` | The vault: rows/grid, filters, Plan-to-Watch priority sections, Picked for you, detail modal. Read-only. |
-| `actions.php` | **The only endpoint that changes data.** POST + login + CSRF; every handler is scoped to the signed-in user. |
+| `create.php`, `edit.php`, `delete.php`, `delete_all.php` | Add / edit / delete one / clear all movies. POST + login + CSRF; scoped to the signed-in user. |
+| `actions.php` | Everything else that changes data (favorites, priority, status, notes, watch history, tags, collections). Same rules. |
+| `includes/action_runner.php` | The shared request pipeline all five files above use: login → POST → CSRF → handler → response. |
 | `movie.php`, `surprise.php` | Read-only JSON (movie detail + history; random Plan-to-Watch pick). |
 | `collections.php`, `stats.php`, `wrapped.php` | Collections list, statistics, Movie Wrapped. |
 | `includes/bootstrap.php` | Session hardening, security headers/CSP, CSRF, auth guard, prepared-statement helpers. |
@@ -27,4 +29,3 @@ Surprise Me and rule-based "Picked for you".
 | `includes/statistics.php`, `includes/recommend.php` | Pure functions for stats / Wrapped / recommendations. |
 | `migrations/`, `migrate.php` | Schema changes. |
 | `assets/js/core.js` · `dashboard.js` · `vault.js` | Shared core · vault page · shared page behaviours. |
-| `delete.php`, `delete_all.php`, `create.php`, `edit.php` | Retired (insecure/broken); they just redirect. |

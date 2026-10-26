@@ -8,47 +8,14 @@
  * Forms post here normally (flash message + redirect back); the JavaScript posts the
  * same fields with fetch() and receives JSON, including a refreshed copy of the movie.
  */
-require __DIR__ . '/includes/movies.php';
+require __DIR__ . '/includes/action_runner.php';
 
-$uid  = cv_require_login();
-$ajax = cv_is_ajax();
-$back = cv_safe_return($_POST['return_to'] ?? '');
-
-function cv_fail(string $msg, int $status, bool $ajax, string $back): never {
-    if ($ajax) cv_json(['ok' => false, 'error' => $msg], $status);
-    cv_flash($msg, 'warn');
-    cv_redirect($back);
-}
-
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    header('Allow: POST');
-    cv_fail('That link can not be opened directly.', 405, $ajax, 'index.php');
-}
-if (!csrf_valid()) {
-    cv_fail('Your session expired. Please reload the page and try again.', 403, $ajax, $back);
-}
-
+$uid = cv_require_login();
 $mid = (int)($_POST['movie_id'] ?? 0);
 
 /** action name => handler. Each returns ['message' => string, 'movie_id' => ?int, 'deleted' => ?bool, 'reload' => ?bool, …extra]. */
 $handlers = [
-    /* ── movies ── */
-    'movie_add' => function () use ($uid) {
-        $id = cv_add_movie($uid, $_POST);
-        return ['message' => 'Movie added to your vault.', 'movie_id' => $id, 'reload' => true];
-    },
-    'movie_edit' => function () use ($uid, $mid) {
-        cv_edit_movie($uid, $mid, $_POST);
-        return ['message' => 'Changes saved.', 'movie_id' => $mid, 'reload' => true];
-    },
-    'movie_delete' => function () use ($uid, $mid) {
-        cv_delete_movie($uid, $mid);
-        return ['message' => 'Removed from your vault.', 'deleted' => true, 'reload' => true];
-    },
-    'movies_delete_all' => function () use ($uid) {
-        $n = cv_delete_all_movies($uid);
-        return ['message' => $n ? 'Your vault has been cleared.' : 'Your vault was already empty.', 'reload' => true];
-    },
+    /* movie_add / movie_edit / movie_delete / movies_delete_all live in create.php, edit.php, delete.php, delete_all.php */
     'movie_favorite' => function () use ($uid, $mid) {
         $on = ($_POST['value'] ?? '') === '1';
         cv_set_favorite($uid, $mid, $on);
@@ -126,25 +93,8 @@ $handlers = [
     },
 ];
 
-$action = (string)($_POST['action'] ?? '');
-if (!isset($handlers[$action])) cv_fail('Unknown action.', 400, $ajax, $back);
-
-try {
-    $r = $handlers[$action]();
-} catch (CvInputError $e) {
-    cv_fail($e->getMessage(), $e->getCode() >= 400 ? $e->getCode() : 422, $ajax, $back);
-} catch (Throwable $e) {
-    error_log('actions.php [' . $action . ']: ' . $e->getMessage());
-    cv_fail('Something went wrong on our side. Please try again.', 500, $ajax, $back);
-}
-
-if ($ajax) {
-    $payload = ['ok' => true, 'message' => $r['message'], 'reload' => !empty($r['reload'])] + array_diff_key($r, ['message' => 1, 'reload' => 1, 'movie_id' => 1]);
-    if (!empty($r['movie_id']) && empty($r['deleted'])) {
-        try { $payload += cv_movie_bundle($uid, (int)$r['movie_id']); } catch (Throwable $e) { /* movie gone: nothing to refresh */ }
-    }
-    cv_json($payload);
-}
-
-cv_flash($r['message']);
-cv_redirect(isset($r['goto']) ? $r['goto'] : $back);
+cv_run_action('actions.php', function (int $uid) use ($handlers): array {
+    $action = (string)($_POST['action'] ?? '');
+    if (!isset($handlers[$action])) throw new CvInputError('Unknown action.', 400);
+    return $handlers[$action]();
+});
