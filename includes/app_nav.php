@@ -26,9 +26,10 @@ $showViewToggle = $showViewToggle ?? false;
     <button type="button" class="btn btn-ghost-danger" data-open="clearAllModal" title="Clear all"><svg class="i"><use href="#i-trash"/></svg><span class="lbl">Clear All</span></button>
     <?php endif; ?>
     <span class="nav-sep" aria-hidden="true"></span>
-    <span class="user-pill" title="Signed in as <?= h($username) ?>">
+    <span class="user-pill user-pill-menu" title="Signed in as <?= h($username) ?>">
       <span class="avatar"><?= h($initial) ?></span>
       <span class="user-name"><?= h($username) ?></span>
+      <button type="button" class="pill-logout" data-open="logoutModal" aria-label="Log out"><svg class="i"><use href="#i-logout"/></svg><span class="lbl">Log out</span></button>
     </span>
   </div>
 </nav>

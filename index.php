@@ -1,7 +1,7 @@
 <?php
 /**
  * Cinema Vault — dashboard (the vault).
- * Read-only page: every change goes through actions.php (POST + CSRF).
+ * Read-only page: every change goes through POST + CSRF: create.php, edit.php, delete.php, delete_all.php, actions.php.
  */
 require __DIR__ . '/includes/movies.php';
 require __DIR__ . '/includes/recommend.php';
@@ -50,6 +50,16 @@ function qs(array $over = []): string {
     if ($q['sort'] === 'newest') $q['sort'] = '';
     $q = array_filter($q, fn($v) => $v !== '' && $v !== 0 && $v !== [] && $v !== null);
     return 'index.php' . ($q ? '?' . http_build_query($q) : '');
+}
+
+/* ── Up next: the Plan to Watch film you care about most (priority, then the one waiting longest) ── */
+$upNext = null;
+$prioRank = ['High' => 0, 'Normal' => 1, 'Low' => 2];
+foreach ($all as $r) {
+    if ($r['status'] !== 'Plan to Watch') continue;
+    if (!$upNext) { $upNext = $r; continue; }
+    $a = $prioRank[$r['priority']] ?? 1; $b = $prioRank[$upNext['priority']] ?? 1;
+    if ($a < $b || ($a === $b && (string)$r['date_added'] < (string)$upNext['date_added'])) $upNext = $r;
 }
 
 /* ── Picked For You (only when not filtering) ── */
@@ -131,7 +141,7 @@ $selectedTags = array_flip($f['tags']);
 <header class="dash-hero">
   <div class="dash-hero-text">
     <p class="dash-kicker" id="greeting">Welcome back</p>
-    <h1 class="dash-title"><?= $activeCollection ? h($activeCollection['name']) : 'My Watchlist' ?></h1>
+    <h1 class="dash-title"><?= $activeCollection ? h($activeCollection['name']) : h($username) ?></h1>
     <p class="dash-sub">
       <?php if ($activeCollection): ?>
         <?= $activeCollection['description'] !== '' ? h($activeCollection['description']) : 'A collection in your vault.' ?>
@@ -143,10 +153,22 @@ $selectedTags = array_flip($f['tags']);
       <?php endif; ?>
     </p>
   </div>
-  <div class="hero-buttons">
-    <button type="button" class="btn btn-ghost btn-lg hero-surprise" data-open="surpriseModal"><span aria-hidden="true">🎲</span> Surprise Me</button>
-    <button type="button" class="btn btn-gold btn-lg hero-add" data-open-add><svg class="i"><use href="#i-plus"/></svg> Add a movie</button>
+  <?php if ($upNext): ?>
+  <div class="hero-next">
+    <button type="button" class="next-card" data-pick="<?= (int)$upNext['watchlist_id'] ?>" aria-label="Up next: <?= h($upNext['movie_title']) ?>. Open details">
+      <span class="next-poster">
+        <?php if ($upNext['cover_url']): ?><img src="<?= h($upNext['cover_url']) ?>" alt="" loading="lazy" data-hide-on-error><?php endif; ?>
+        <svg class="i"><use href="#i-film"/></svg>
+      </span>
+      <span class="next-info">
+        <small>Up next</small>
+        <strong><?= h($upNext['movie_title']) ?></strong>
+        <em><?= ['High' => 'Must watch', 'Normal' => 'Next', 'Low' => 'Someday'][$upNext['priority']] ?? 'Plan to watch' ?></em>
+      </span>
+      <svg class="i next-go" aria-hidden="true"><use href="#i-chev-right"/></svg>
+    </button>
   </div>
+  <?php endif; ?>
 </header>
 
 <?php if ($activeCollection): ?>
@@ -476,7 +498,7 @@ function movieFormFields(string $p, array $genre_options): void { ?>
       <button type="button" class="modal-close" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
     </div>
     <div class="modal-body">
-      <form method="POST" action="actions.php" enctype="multipart/form-data" id="addForm">
+      <form method="POST" action="create.php" enctype="multipart/form-data" id="addForm">
         <?= csrf_field() ?>
         <input type="hidden" name="action" value="movie_add">
         <input type="hidden" name="return_to" value="<?= h(qs()) ?>">
@@ -495,7 +517,7 @@ function movieFormFields(string $p, array $genre_options): void { ?>
       <button type="button" class="modal-close" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
     </div>
     <div class="modal-body">
-      <form method="POST" action="actions.php" enctype="multipart/form-data" id="editForm">
+      <form method="POST" action="edit.php" enctype="multipart/form-data" id="editForm">
         <?= csrf_field() ?>
         <input type="hidden" name="action" value="movie_edit">
         <input type="hidden" name="return_to" value="<?= h(qs()) ?>">
@@ -606,7 +628,7 @@ function movieFormFields(string $p, array $genre_options): void { ?>
 <!-- DELETE CONFIRM (POST + CSRF) -->
 <div class="modal-backdrop" id="deleteModal" role="alertdialog" aria-modal="true" aria-labelledby="delH">
   <div class="modal modal-sm">
-    <form method="POST" action="actions.php" class="confirm">
+    <form method="POST" action="delete.php" class="confirm">
       <?= csrf_field() ?>
       <input type="hidden" name="action" value="movie_delete">
       <input type="hidden" name="movie_id" id="delId">
@@ -625,7 +647,7 @@ function movieFormFields(string $p, array $genre_options): void { ?>
 <!-- CLEAR ALL CONFIRM -->
 <div class="modal-backdrop" id="clearAllModal" role="alertdialog" aria-modal="true" aria-labelledby="clearH">
   <div class="modal modal-sm">
-    <form method="POST" action="actions.php" class="confirm">
+    <form method="POST" action="delete_all.php" class="confirm">
       <?= csrf_field() ?>
       <input type="hidden" name="action" value="movies_delete_all">
       <input type="hidden" name="return_to" value="index.php">
