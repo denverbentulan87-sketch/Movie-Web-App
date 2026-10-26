@@ -1,6 +1,5 @@
 <?php
-include 'db.php';
-session_start();
+require __DIR__ . '/includes/bootstrap.php';
 
 $loggedIn  = isset($_SESSION['user_id']);
 $authModal = '';          // 'login' | 'register' | ''  -> which tab opens on load
@@ -22,7 +21,7 @@ if (!$loggedIn && $authModal === '') {
     elseif (($_GET['modal'] ?? '') === 'login')    $authModal = 'login';
     elseif (($_GET['modal'] ?? '') === 'register') $authModal = 'register';
 }
-$h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+$h = fn($s) => h($s);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -33,7 +32,7 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
 <meta name="description" content="Track what you've watched, build the perfect watchlist and rate every film in one beautifully designed vault.">
 <?php include 'includes/head.php'; ?>
 <link rel="stylesheet" href="assets/css/landing.css">
-<script>document.documentElement.classList.add('js');</script>
+<script nonce="<?= h(cv_nonce()) ?>">document.documentElement.classList.add('js');</script>
 </head>
 <body class="landing">
 <?php include 'includes/icons.php'; ?>
@@ -321,6 +320,7 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
         <div class="form-msg error" data-msg="login" role="alert" <?= ($authError && $authModal==='login') ? '' : 'hidden' ?>><svg class="i"><use href="#i-alert"/></svg><span><?= $authModal==='login' ? $h($authError) : '' ?></span></div>
 
         <form method="POST" action="login.php" id="loginForm" novalidate>
+          <?= csrf_field() ?>
           <div class="field">
             <label for="loginUser">Username</label>
             <div class="input-wrap">
@@ -350,6 +350,7 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
         <div class="form-msg error" data-msg="register" role="alert" <?= ($authError && $authModal==='register') ? '' : 'hidden' ?>><svg class="i"><use href="#i-alert"/></svg><span><?= $authModal==='register' ? $h($authError) : '' ?></span></div>
 
         <form method="POST" action="register.php" id="registerForm" novalidate>
+          <?= csrf_field() ?>
           <div class="field">
             <label for="regUser">Username</label>
             <div class="input-wrap">

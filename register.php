@@ -1,6 +1,5 @@
 <?php
-include 'db.php';
-session_start();
+require __DIR__ . '/includes/bootstrap.php';
 
 $isAjax = strtolower($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'xmlhttprequest';
 
@@ -24,13 +23,17 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_POST['register'])) {
     exit();
 }
 
-$username = trim($_POST['username'] ?? '');
-$password = $_POST['password'] ?? '';
-$confirm  = $_POST['confirm']  ?? '';
+$username = trim((string)($_POST['username'] ?? ''));
+$password = (string)($_POST['password'] ?? '');
+$confirm  = (string)($_POST['confirm']  ?? '');
 $error    = '';
 $field    = '';
 
-if (strlen($username) < 3) {
+if (!csrf_valid()) {
+    $error = 'Your session expired. Please reload the page and try again.';
+} elseif (mb_strlen($username) < 3 || mb_strlen($username) > 100) {
+    $error = 'Username must be 3 to 100 characters.'; $field = 'username';
+} elseif (strlen($username) < 3) {
     $error = 'Username must be at least 3 characters.'; $field = 'username';
 } elseif (strlen($password) < 6) {
     $error = 'Password must be at least 6 characters.'; $field = 'password';

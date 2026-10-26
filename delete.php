@@ -1,28 +1,8 @@
 <?php
-include 'db.php';
-session_start();
-
-if (!isset($_SESSION['user_id'])) {
-    header("Location: homepage.php?modal=login");
-    exit();
-}
-
-// ✅ GET MOVIE ID (watchlist_id)
-$id = $_GET['id'];
-$user_id = $_SESSION['user_id'];
-
-// ✅ PREPARED STATEMENT (safe)
-$stmt = $conn->prepare("
-    DELETE FROM movie_watchlist 
-    WHERE watchlist_id=? AND user_id=?
-");
-
-$stmt->bind_param("ii", $id, $user_id);
-
-if ($stmt->execute()) {
-    header("Location: index.php");
-    exit();
-} else {
-    echo "Error in deleting movie.";
-}
-?>
+/**
+ * RETIRED. Deleting through a GET link (delete.php?id=...) could be triggered
+ * by any page or image tag the user happened to open (CSRF). Removing a movie
+ * is now a POST with a CSRF token handled by actions.php.
+ */
+header('Location: index.php');
+exit;

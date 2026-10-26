@@ -1,0 +1,2 @@
+# Internal files: never served over HTTP
+Require all denied
